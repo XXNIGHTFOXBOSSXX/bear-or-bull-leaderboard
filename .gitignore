@@ -1,0 +1,13 @@
+__pycache__/
+/TOTAL PLAYERS/
+BEARORBULL.base64.txt
+BEARORBULL.deploy.png
+*.py[cod]
+*.log
+.streamlit/secrets.toml
+.venv/
+venv/
+env/
+.env
+.DS_Store
+Thumbs.db
