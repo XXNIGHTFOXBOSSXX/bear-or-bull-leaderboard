@@ -354,8 +354,8 @@ def build_leaderboard(games):
                 "Total Score": total_score,
                 "Best Placement": stats["best_finish"],
                 "1st Place Finishes": stats["first_place_finishes"],
-                "Prize Zone Finishes": stats["top_5_finishes"],
-                "Points Finishes": stats["top_20_finishes"],
+                "Top 5 Finishes": stats["top_5_finishes"],
+                "Top 20 Finishes": stats["top_20_finishes"],
                 "Weeks Appeared In": ", ".join(sorted(stats["weeks"])),
                 "Months Played": ", ".join(sorted(stats["months"])),
             }
@@ -978,7 +978,7 @@ def show_top_performers_strip(leaderboard):
 
     most_prize_name, most_prize_count = get_top_performer(
         leaderboard,
-        "Prize Zone Finishes",
+        "Top 5 Finishes",
     )
     most_first_name, most_first_count = get_top_performer(
         leaderboard,
@@ -991,7 +991,7 @@ def show_top_performers_strip(leaderboard):
     )
 
     performers = [
-        ("Most Prize Zone Finishes", most_prize_name, most_prize_count),
+        ("Most Top 5 Finishes", most_prize_name, most_prize_count),
         ("Most 1st Place Finishes", most_first_name, most_first_count),
         ("Most Games Played", most_games_name, most_games_count),
         ("Highest Total Score", highest_score_name, highest_score_count),
@@ -1053,12 +1053,12 @@ def show_player_profile(leaderboard, search_name):
                     <div class="profile-stat-value">{player["1st Place Finishes"]}</div>
                 </div>
                 <div class="profile-stat">
-                    <div class="profile-stat-label">Prize Zone Finishes</div>
-                    <div class="profile-stat-value">{player["Prize Zone Finishes"]}</div>
+                    <div class="profile-stat-label">Top 5 Finishes</div>
+                    <div class="profile-stat-value">{player["Top 5 Finishes"]}</div>
                 </div>
                 <div class="profile-stat">
-                    <div class="profile-stat-label">Points Finishes</div>
-                    <div class="profile-stat-value">{player["Points Finishes"]}</div>
+                    <div class="profile-stat-label">Top 20 Finishes</div>
+                    <div class="profile-stat-value">{player["Top 20 Finishes"]}</div>
                 </div>
                 <div class="profile-stat">
                     <div class="profile-stat-label">Appearance Points</div>
@@ -1185,8 +1185,8 @@ def show_leaderboard_tables(
         "Total Score",
         "Best Placement",
         "1st Place Finishes",
-        "Prize Zone Finishes",
-        "Points Finishes",
+        "Top 5 Finishes",
+        "Top 20 Finishes",
     ]
     full_columns = [
         "Rank",
@@ -1197,8 +1197,8 @@ def show_leaderboard_tables(
         "Total Score",
         "Best Placement",
         "1st Place Finishes",
-        "Prize Zone Finishes",
-        "Points Finishes",
+        "Top 5 Finishes",
+        "Top 20 Finishes",
         "Months Played",
     ]
 
@@ -1221,8 +1221,8 @@ def show_leaderboard_tables(
         "Total Score",
         "Best Placement",
         "1st Place Finishes",
-        "Prize Zone Finishes",
-        "Points Finishes",
+        "Top 5 Finishes",
+        "Top 20 Finishes",
         "Weeks Appeared In",
     ]
     csv_data = visible_leaderboard[export_columns].to_csv(index=False).encode("utf-8")
@@ -1389,7 +1389,7 @@ def show_season_insights(games, leaderboard):
     smallest_game = game_table.sort_values("Player Entries", ascending=True).iloc[0]
     most_active_month = monthly_table.sort_values("Total Entries", ascending=False).iloc[0]
     current_leader = leaderboard.iloc[0]
-    prize_name, prize_count = get_top_performer(leaderboard, "Prize Zone Finishes")
+    prize_name, prize_count = get_top_performer(leaderboard, "Top 5 Finishes")
     average_game_size = round(game_table["Player Entries"].mean(), 1)
 
     insights = [
@@ -1397,7 +1397,7 @@ def show_season_insights(games, leaderboard):
         f"Smallest game so far: {smallest_game['Game']} with {smallest_game['Player Entries']} players.",
         f"Most active month: {most_active_month['Month']} with {most_active_month['Total Entries']} entries.",
         f"Current leader: {current_leader['Player Name']} with {current_leader['Total Score']} points.",
-        f"Most prize-zone finishes: {prize_name} with {prize_count}.",
+        f"Most top 5 finishes: {prize_name} with {prize_count}.",
         f"Average game size: {average_game_size} players.",
     ]
 
@@ -1516,8 +1516,8 @@ def show_player_performance_tables(leaderboard):
                 "Games Played",
                 "Best Placement",
                 "1st Place Finishes",
-                "Prize Zone Finishes",
-                "Points Finishes",
+                "Top 5 Finishes",
+                "Top 20 Finishes",
             ],
         ),
         (
@@ -1529,12 +1529,12 @@ def show_player_performance_tables(leaderboard):
             ["Rank", "Player Name", "Games Played", "Total Score"],
         ),
         (
-            "Top 10 By Prize Zone Finishes",
+            "Top 10 By Top 5 Finishes",
             leaderboard.sort_values(
-                ["Prize Zone Finishes", "Total Score", "Player Name"],
+                ["Top 5 Finishes", "Total Score", "Player Name"],
                 ascending=[False, False, True],
             ).head(10),
-            ["Rank", "Player Name", "Prize Zone Finishes", "Total Score", "Games Played"],
+            ["Rank", "Player Name", "Top 5 Finishes", "Total Score", "Games Played"],
         ),
         (
             "Top 10 By 1st Place Finishes",
@@ -1545,12 +1545,12 @@ def show_player_performance_tables(leaderboard):
             ["Rank", "Player Name", "1st Place Finishes", "Total Score", "Games Played"],
         ),
         (
-            "Top 10 By Points Finishes",
+            "Top 10 By Top 20 Finishes",
             leaderboard.sort_values(
-                ["Points Finishes", "Total Score", "Player Name"],
+                ["Top 20 Finishes", "Total Score", "Player Name"],
                 ascending=[False, False, True],
             ).head(10),
-            ["Rank", "Player Name", "Points Finishes", "Total Score", "Games Played"],
+            ["Rank", "Player Name", "Top 20 Finishes", "Total Score", "Games Played"],
         ),
     ]
 
@@ -1622,12 +1622,12 @@ def show_analytics_tab(analytics_games, all_games):
                 ]
                 show_chart(top_score_chart, "Player Name", "Total Score")
             with chart_columns[1]:
-                st.markdown("**Top 10 Prize Zone Finishes**")
+                st.markdown("**Top 10 Top 5 Finishes**")
                 prize_chart = analytics_leaderboard.sort_values(
-                    ["Prize Zone Finishes", "Total Score", "Player Name"],
+                    ["Top 5 Finishes", "Total Score", "Player Name"],
                     ascending=[False, False, True],
-                ).head(10)[["Player Name", "Prize Zone Finishes"]]
-                show_chart(prize_chart, "Player Name", "Prize Zone Finishes")
+                ).head(10)[["Player Name", "Top 5 Finishes"]]
+                show_chart(prize_chart, "Player Name", "Top 5 Finishes")
 
     with analytics_monthly:
         show_section_heading("Monthly Analytics")
@@ -1734,8 +1734,8 @@ def main():
                 "Total Score",
                 "Best Placement",
                 "1st Place Finishes",
-                "Prize Zone Finishes",
-                "Points Finishes",
+                "Top 5 Finishes",
+                "Top 20 Finishes",
             ]
             if show_weeks:
                 player_search_columns.append("Weeks Appeared In")
