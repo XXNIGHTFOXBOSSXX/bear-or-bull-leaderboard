@@ -1027,6 +1027,7 @@ def show_player_profile(leaderboard, search_name):
     player = matches.iloc[0]
     player_name = escape(str(player["Player Name"]))
     weeks_appeared_in = escape(str(player["Weeks Appeared In"]))
+    overall_rank = f"{player['Rank']}/{len(leaderboard)}"
     st.markdown(
         f"""
         <div class="profile-card">
@@ -1034,7 +1035,7 @@ def show_player_profile(leaderboard, search_name):
             <div class="profile-grid">
                 <div class="profile-stat">
                     <div class="profile-stat-label">Overall Rank</div>
-                    <div class="profile-stat-value">{player["Rank"]}</div>
+                    <div class="profile-stat-value">{overall_rank}</div>
                 </div>
                 <div class="profile-stat">
                     <div class="profile-stat-label">Total Score</div>
