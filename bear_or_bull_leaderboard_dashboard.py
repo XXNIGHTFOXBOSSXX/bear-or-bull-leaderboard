@@ -1,11 +1,15 @@
 from collections import Counter, defaultdict
 import base64
+import hashlib
 from html import escape
+import json
+import math
 from pathlib import Path
 import re
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 # Folder that contains the weekly BEAR OR BULL player list text files.
@@ -68,6 +72,28 @@ MONTH_SORT_ORDER = {
     for month_index, month in enumerate(MONTH_ORDER, start=1)
 }
 MONTH_PATTERN = "|".join(sorted(MONTH_ALIASES, key=len, reverse=True))
+
+# Bubble Arena visual constants.
+#
+# DEV NOTE: Bubble Arena must keep scoring and ranking in Python. These constants
+# control presentation only: rank-to-ring mapping, radius bounds, and supported
+# bubble-size metrics. Changing ring boundaries changes the visual zones but must
+# not alter build_leaderboard() or the poker scoring rules.
+BUBBLE_ARENA_RINGS = [
+    {"id": "champion", "label": "Champion's Core", "min_rank": 1, "max_rank": 1},
+    {"id": "legends", "label": "Legends' Ring", "min_rank": 2, "max_rank": 5},
+    {"id": "contenders", "label": "Contenders' Ring", "min_rank": 6, "max_rank": 20},
+    {"id": "challengers", "label": "Challengers' Ring", "min_rank": 21, "max_rank": 50},
+    {"id": "field", "label": "The Field", "min_rank": 51, "max_rank": None},
+]
+BUBBLE_ARENA_MIN_RADIUS = 5
+BUBBLE_ARENA_MAX_RADIUS = 30
+BUBBLE_ARENA_RECENT_FORM_LENGTH = 5
+BUBBLE_ARENA_SIZE_METRICS = {
+    "Total Score": "score",
+    "Tournament Wins": "wins",
+    "Games Played": "gamesPlayed",
+}
 
 def ordinal_number(number):
     """Turn 1 into 1st, 2 into 2nd, and so on."""
@@ -381,6 +407,226 @@ def build_leaderboard(games):
     leaderboard["Best Placement"] = leaderboard["Best Placement"].apply(ordinal_number)
 
     return leaderboard, total_player_entries
+
+
+def parse_ordinal_text(value):
+    """Convert values such as 1st or 22nd back to integers for visual payloads."""
+    match = re.search(r"\d+", str(value))
+    if not match:
+        return None
+    return int(match.group(0))
+
+
+def get_bubble_arena_ring(rank):
+    """Return the configured Bubble Arena ring for a leaderboard rank."""
+    rank = int(rank)
+    for ring in BUBBLE_ARENA_RINGS:
+        if ring["max_rank"] is None and rank >= ring["min_rank"]:
+            return ring
+        if ring["min_rank"] <= rank <= ring["max_rank"]:
+            return ring
+    return BUBBLE_ARENA_RINGS[-1]
+
+
+def scale_bubble_radius(value, minimum_value, maximum_value):
+    """
+    Scale a numeric metric into a bubble radius using square-root scaling.
+
+    DEV NOTE: Bubble area should broadly represent the selected metric, so the
+    radius uses sqrt-normalised values instead of direct score-to-radius mapping.
+    Invalid or missing values fall back to the minimum radius and never crash the
+    renderer.
+    """
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return BUBBLE_ARENA_MIN_RADIUS
+
+    if not math.isfinite(numeric_value) or numeric_value <= 0:
+        return BUBBLE_ARENA_MIN_RADIUS
+
+    try:
+        minimum_value = float(minimum_value)
+        maximum_value = float(maximum_value)
+    except (TypeError, ValueError):
+        return BUBBLE_ARENA_MIN_RADIUS
+
+    if maximum_value <= minimum_value:
+        return (BUBBLE_ARENA_MIN_RADIUS + BUBBLE_ARENA_MAX_RADIUS) / 2
+
+    normalized = (math.sqrt(numeric_value) - math.sqrt(max(minimum_value, 0))) / (
+        math.sqrt(maximum_value) - math.sqrt(max(minimum_value, 0))
+    )
+    normalized = max(0, min(1, normalized))
+    return round(
+        BUBBLE_ARENA_MIN_RADIUS
+        + normalized * (BUBBLE_ARENA_MAX_RADIUS - BUBBLE_ARENA_MIN_RADIUS),
+        2,
+    )
+
+
+def get_player_finish_histories(games):
+    """Build chronological finish histories from already-parsed weekly games."""
+    histories = defaultdict(list)
+
+    for game_index, game in enumerate(games):
+        for player in game["players"]:
+            key = player_key(player["name"])
+            histories[key].append(
+                {
+                    "gameIndex": game_index,
+                    "game": game["game"],
+                    "fileName": game["file_name"],
+                    "position": int(player["position"]),
+                }
+            )
+
+    return histories
+
+
+def get_previous_rank_lookup(games):
+    """
+    Recompute ranks immediately before the latest included game when possible.
+
+    DEV NOTE: Movement is shown only when it can be derived with the canonical
+    build_leaderboard() function. If fewer than two games are selected, the
+    Bubble Arena payload leaves movement fields empty.
+    """
+    if len(games) < 2:
+        return {}
+
+    previous_leaderboard, _ = build_leaderboard(games[:-1])
+    if previous_leaderboard.empty:
+        return {}
+
+    return {
+        player_key(row["Player Name"]): int(row["Rank"])
+        for _, row in previous_leaderboard.iterrows()
+    }
+
+
+def build_bubble_arena_payload(leaderboard, games, size_metric_label):
+    """
+    Adapt the existing leaderboard dataframe into Bubble Arena's JSON schema.
+
+    Public interface:
+    - leaderboard: dataframe returned by build_leaderboard().
+    - games: the same filtered game list used to create that leaderboard.
+    - size_metric_label: one of BUBBLE_ARENA_SIZE_METRICS.
+
+    Data assumptions:
+    - Player identity follows the existing case-insensitive player_key() rule.
+    - Rank and score are canonical outputs from build_leaderboard().
+    - Extra visual stats are derived from parsed games only, never by rereading
+      source files or duplicating scoring rules in JavaScript.
+
+    Security/stability:
+    - Return only JSON-safe Python primitives.
+    - Usernames are serialized with json.dumps before entering the component.
+    - Browser code handles missing values and never recalculates scores.
+    """
+    if leaderboard.empty:
+        return {
+            "players": [],
+            "rings": BUBBLE_ARENA_RINGS,
+            "meta": {
+                "visiblePlayers": 0,
+                "sizeMetric": size_metric_label,
+                "period": "No players",
+                "latestGame": None,
+            },
+        }
+
+    metric_key = BUBBLE_ARENA_SIZE_METRICS.get(size_metric_label, "score")
+    histories = get_player_finish_histories(games)
+    previous_ranks = get_previous_rank_lookup(games)
+    latest_game = games[-1] if games else None
+    latest_players = {
+        player_key(player["name"])
+        for player in latest_game["players"]
+    } if latest_game else set()
+    latest_winner_key = (
+        player_key(latest_game["winner"]) if latest_game and latest_game["winner"] else None
+    )
+
+    raw_players = []
+    for _, row in leaderboard.iterrows():
+        key = player_key(row["Player Name"])
+        finish_history = histories.get(key, [])
+        finish_values = [entry["position"] for entry in finish_history]
+        recent_form = finish_values[-BUBBLE_ARENA_RECENT_FORM_LENGTH:]
+        latest_finish = finish_values[-1] if finish_values else None
+        average_finish = (
+            round(sum(finish_values) / len(finish_values), 1)
+            if finish_values else None
+        )
+        previous_rank = previous_ranks.get(key)
+        current_rank = int(row["Rank"])
+        rank_movement = (
+            previous_rank - current_rank
+            if previous_rank is not None else None
+        )
+        ring = get_bubble_arena_ring(current_rank)
+
+        raw_players.append(
+            {
+                "id": key,
+                "name": str(row["Player Name"]),
+                "rank": current_rank,
+                "score": int(row["Total Score"]),
+                "gamesPlayed": int(row["Games Played"]),
+                "wins": int(row["1st Place Finishes"]),
+                "topFiveFinishes": int(row["Top 5 Finishes"]),
+                "topTwentyFinishes": int(row["Top 20 Finishes"]),
+                "bestFinish": parse_ordinal_text(row["Best Placement"]),
+                "bestFinishText": str(row["Best Placement"]),
+                "averageFinish": average_finish,
+                "latestFinish": latest_finish,
+                "recentForm": recent_form,
+                "previousRank": previous_rank,
+                "rankMovement": rank_movement,
+                "activeLatestGame": key in latest_players,
+                "isLatestWinner": key == latest_winner_key,
+                "ring": ring["id"],
+                "ringLabel": ring["label"],
+                "sizeMetricValue": None,
+            }
+        )
+
+    for player in raw_players:
+        player["sizeMetricValue"] = player.get(metric_key)
+
+    valid_metric_values = [
+        float(player["sizeMetricValue"])
+        for player in raw_players
+        if isinstance(player["sizeMetricValue"], (int, float))
+        and math.isfinite(float(player["sizeMetricValue"]))
+        and float(player["sizeMetricValue"]) > 0
+    ]
+    minimum_metric = min(valid_metric_values) if valid_metric_values else 0
+    maximum_metric = max(valid_metric_values) if valid_metric_values else 0
+
+    for player in raw_players:
+        player["radius"] = scale_bubble_radius(
+            player["sizeMetricValue"],
+            minimum_metric,
+            maximum_metric,
+        )
+
+    period_months = sorted({game["month"] for game in games}, key=get_month_sort_number)
+    period = ", ".join(period_months) if period_months else "Selected games"
+
+    return {
+        "players": raw_players,
+        "rings": BUBBLE_ARENA_RINGS,
+        "meta": {
+            "visiblePlayers": len(raw_players),
+            "sizeMetric": size_metric_label,
+            "period": period,
+            "latestGame": latest_game["game"] if latest_game else None,
+            "movementAvailable": bool(previous_ranks),
+        },
+    }
 
 
 @st.cache_data(show_spinner=False)
@@ -1079,6 +1325,847 @@ def show_player_profile(leaderboard, search_name):
     )
 
 
+def show_bubble_arena(leaderboard, games):
+    """
+    Render Bubble Arena from the canonical Python leaderboard.
+
+    DEV NOTE: This function is a visual adapter only. Browser code receives
+    pre-ranked, pre-scored data and may change layout/search/selection, but must
+    not recalculate poker scores or reinterpret source text files.
+    """
+    show_section_heading("Bubble Arena")
+    st.markdown(
+        """
+        <div class="section-note">
+            EASY NOW. Rank sets the ring, bubble area follows the selected metric,
+            and the latest game glow marks players active in the newest loaded file.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    control_columns = st.columns([1.15, 1, 1])
+    with control_columns[0]:
+        size_metric_label = st.selectbox(
+            "Size bubbles by",
+            list(BUBBLE_ARENA_SIZE_METRICS),
+            index=0,
+            key="bubble_arena_size_metric",
+        )
+    with control_columns[1]:
+        active_only = st.checkbox(
+            "Active in latest game",
+            value=False,
+            key="bubble_arena_active_only",
+        )
+    with control_columns[2]:
+        winners_only = st.checkbox(
+            "Tournament winners only",
+            value=False,
+            key="bubble_arena_winners_only",
+        )
+
+    payload = build_bubble_arena_payload(leaderboard, games, size_metric_label)
+    if active_only:
+        payload["players"] = [
+            player for player in payload["players"] if player["activeLatestGame"]
+        ]
+    if winners_only:
+        payload["players"] = [
+            player for player in payload["players"] if player["wins"] > 0
+        ]
+    payload["meta"]["visiblePlayers"] = len(payload["players"])
+
+    if not payload["players"]:
+        st.info("No players match the current Bubble Arena filters.")
+        return
+
+    payload_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+    root_hash = hashlib.sha1(payload_json.encode("utf-8")).hexdigest()[:10]
+    root_id = f"bubble-arena-{root_hash}"
+
+    html = f"""
+    <div id="{root_id}" class="bubble-arena-shell">
+        <style>
+            #{root_id} {{
+                --arena-black: #050505;
+                --arena-panel: rgba(12, 11, 8, 0.94);
+                --arena-panel-soft: rgba(24, 20, 12, 0.82);
+                --arena-gold: #d6af3b;
+                --arena-gold-bright: #f1cf66;
+                --arena-gold-pale: #fff0b8;
+                --arena-teal: #4fb7a4;
+                --arena-crimson: #8f2e35;
+                --arena-silver: #8f8b80;
+                --arena-text: #fff4cf;
+                --arena-muted: #b8aa82;
+                color: var(--arena-text);
+                font-family: inherit;
+            }}
+
+            #{root_id} .arena-controls {{
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                margin: 8px 0 10px 0;
+                flex-wrap: wrap;
+            }}
+
+            #{root_id} .arena-search {{
+                min-width: min(100%, 320px);
+                flex: 1;
+            }}
+
+            #{root_id} label {{
+                display: block;
+                color: var(--arena-muted);
+                font-size: 12px;
+                font-weight: 800;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                margin-bottom: 5px;
+            }}
+
+            #{root_id} input[type="search"] {{
+                width: 100%;
+                border: 1px solid rgba(214, 175, 59, 0.32);
+                border-radius: 7px;
+                background: rgba(5, 5, 5, 0.82);
+                color: var(--arena-text);
+                padding: 9px 10px;
+                font: inherit;
+                outline-color: var(--arena-gold-bright);
+            }}
+
+            #{root_id} .arena-actions {{
+                display: flex;
+                gap: 8px;
+                align-items: end;
+                flex-wrap: wrap;
+            }}
+
+            #{root_id} button {{
+                border: 1px solid rgba(241, 207, 102, 0.36);
+                border-radius: 7px;
+                background: linear-gradient(135deg, #c69a2c, #7b5a16);
+                color: #fff4cf;
+                font-weight: 800;
+                padding: 8px 10px;
+                cursor: pointer;
+                font: inherit;
+            }}
+
+            #{root_id} button[aria-pressed="false"] {{
+                background: rgba(214, 175, 59, 0.08);
+                color: var(--arena-muted);
+            }}
+
+            #{root_id} .arena-meta {{
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+                margin-bottom: 8px;
+            }}
+
+            #{root_id} .arena-badge {{
+                border: 1px solid rgba(214, 175, 59, 0.24);
+                border-radius: 999px;
+                background: rgba(214, 175, 59, 0.08);
+                color: var(--arena-text);
+                padding: 5px 9px;
+                font-size: 12px;
+                font-weight: 800;
+            }}
+
+            #{root_id} .arena-layout {{
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(260px, 330px);
+                gap: 12px;
+                align-items: stretch;
+            }}
+
+            #{root_id} .arena-stage {{
+                position: relative;
+                min-height: 680px;
+                border: 1px solid rgba(214, 175, 59, 0.28);
+                border-radius: 8px;
+                overflow: hidden;
+                background:
+                    radial-gradient(circle at 50% 50%, rgba(214, 175, 59, 0.16), transparent 18%),
+                    radial-gradient(circle at 18% 44%, rgba(79, 183, 164, 0.08), transparent 25%),
+                    radial-gradient(circle at 82% 48%, rgba(143, 46, 53, 0.08), transparent 24%),
+                    linear-gradient(145deg, rgba(19, 16, 10, 0.95), rgba(2, 2, 2, 0.97));
+                box-shadow: inset 0 0 74px rgba(0, 0, 0, 0.56), 0 18px 44px rgba(0, 0, 0, 0.28);
+            }}
+
+            #{root_id} svg {{
+                width: 100%;
+                height: 100%;
+                display: block;
+            }}
+
+            #{root_id} .guide-circle {{
+                fill: none;
+                stroke: rgba(214, 175, 59, 0.22);
+                stroke-width: 1;
+            }}
+
+            #{root_id} .guide-label {{
+                fill: rgba(255, 244, 207, 0.74);
+                font-size: 11px;
+                font-weight: 800;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+            }}
+
+            #{root_id} .arena-crest {{
+                fill: rgba(214, 175, 59, 0.11);
+                stroke: rgba(214, 175, 59, 0.35);
+                stroke-width: 1.4;
+            }}
+
+            #{root_id} .bubble {{
+                cursor: pointer;
+                transition: opacity 180ms ease, filter 180ms ease;
+            }}
+
+            #{root_id} .bubble circle {{
+                stroke-width: 1.8;
+                vector-effect: non-scaling-stroke;
+            }}
+
+            #{root_id} .bubble.is-muted {{
+                opacity: 0.20;
+            }}
+
+            #{root_id} .bubble.is-selected circle,
+            #{root_id} .bubble:focus circle {{
+                stroke: var(--arena-gold-pale);
+                stroke-width: 3.2;
+                filter: drop-shadow(0 0 13px rgba(241, 207, 102, 0.72));
+            }}
+
+            #{root_id} .bubble-name {{
+                fill: #101008;
+                font-size: 10px;
+                font-weight: 900;
+                text-anchor: middle;
+                pointer-events: none;
+            }}
+
+            #{root_id} .bubble-name.is-light {{
+                fill: var(--arena-text);
+            }}
+
+            #{root_id} .bubble-symbol {{
+                fill: #171006;
+                font-size: 16px;
+                font-weight: 900;
+                text-anchor: middle;
+                pointer-events: none;
+            }}
+
+            #{root_id} .arena-tooltip {{
+                position: absolute;
+                z-index: 4;
+                display: none;
+                max-width: 260px;
+                border: 1px solid rgba(241, 207, 102, 0.42);
+                border-radius: 8px;
+                background: rgba(5, 5, 5, 0.94);
+                color: var(--arena-text);
+                padding: 9px 10px;
+                box-shadow: 0 16px 38px rgba(0, 0, 0, 0.42);
+                pointer-events: none;
+                font-size: 12px;
+                line-height: 1.45;
+            }}
+
+            #{root_id} .arena-tooltip strong {{
+                color: var(--arena-gold-bright);
+            }}
+
+            #{root_id} .arena-panel {{
+                border: 1px solid rgba(214, 175, 59, 0.28);
+                border-radius: 8px;
+                background:
+                    radial-gradient(circle at top right, rgba(214, 175, 59, 0.12), transparent 36%),
+                    linear-gradient(180deg, rgba(18, 15, 9, 0.96), rgba(6, 6, 6, 0.98));
+                padding: 12px;
+                min-height: 680px;
+            }}
+
+            #{root_id} .panel-title {{
+                color: var(--arena-gold-bright);
+                font-size: 18px;
+                font-weight: 900;
+                margin-bottom: 6px;
+                word-break: break-word;
+            }}
+
+            #{root_id} .panel-subtitle {{
+                color: var(--arena-muted);
+                font-size: 12px;
+                margin-bottom: 11px;
+            }}
+
+            #{root_id} .panel-grid {{
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 8px;
+            }}
+
+            #{root_id} .panel-stat {{
+                border: 1px solid rgba(214, 175, 59, 0.15);
+                border-radius: 7px;
+                background: rgba(214, 175, 59, 0.06);
+                padding: 8px;
+            }}
+
+            #{root_id} .panel-label {{
+                color: var(--arena-muted);
+                font-size: 10px;
+                font-weight: 900;
+                letter-spacing: 0.05em;
+                text-transform: uppercase;
+                margin-bottom: 3px;
+            }}
+
+            #{root_id} .panel-value {{
+                color: var(--arena-text);
+                font-size: 14px;
+                font-weight: 900;
+                word-break: break-word;
+            }}
+
+            #{root_id} .legend {{
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 6px;
+                margin-top: 10px;
+            }}
+
+            #{root_id} .legend-item {{
+                display: flex;
+                gap: 6px;
+                align-items: center;
+                color: var(--arena-muted);
+                font-size: 11px;
+            }}
+
+            #{root_id} .legend-dot {{
+                width: 12px;
+                height: 12px;
+                border-radius: 999px;
+                border: 1px solid rgba(241, 207, 102, 0.45);
+                flex: 0 0 auto;
+            }}
+
+            #{root_id} .empty-state {{
+                display: flex;
+                height: 100%;
+                align-items: center;
+                justify-content: center;
+                color: var(--arena-muted);
+                text-align: center;
+                padding: 24px;
+            }}
+
+            @media (max-width: 900px) {{
+                #{root_id} .arena-layout {{
+                    grid-template-columns: 1fr;
+                }}
+                #{root_id} .arena-stage {{
+                    min-height: 560px;
+                }}
+                #{root_id} .arena-panel {{
+                    min-height: 0;
+                }}
+            }}
+
+            @media (max-width: 560px) {{
+                #{root_id} .arena-stage {{
+                    min-height: 430px;
+                }}
+                #{root_id} .panel-grid,
+                #{root_id} .legend {{
+                    grid-template-columns: 1fr;
+                }}
+            }}
+        </style>
+        <script type="application/json" id="{root_id}-data">{payload_json}</script>
+        <div class="arena-controls">
+            <div class="arena-search">
+                <label for="{root_id}-search">Search player</label>
+                <input id="{root_id}-search" type="search" placeholder="Type any player name..." autocomplete="off">
+            </div>
+            <div class="arena-actions">
+                <button type="button" id="{root_id}-motion" aria-pressed="true">Motion on</button>
+                <button type="button" id="{root_id}-clear">Clear selection</button>
+            </div>
+        </div>
+        <div class="arena-meta" aria-live="polite">
+            <span class="arena-badge">Period: <strong data-meta="period"></strong></span>
+            <span class="arena-badge">Visible players: <strong data-meta="visible"></strong></span>
+            <span class="arena-badge">Bubble size: <strong data-meta="metric"></strong></span>
+            <span class="arena-badge">Latest game: <strong data-meta="latest"></strong></span>
+        </div>
+        <div class="arena-layout">
+            <div class="arena-stage" id="{root_id}-stage">
+                <svg id="{root_id}-svg" role="img" aria-label="Bubble Arena leaderboard map"></svg>
+                <div class="arena-tooltip" id="{root_id}-tooltip"></div>
+            </div>
+            <aside class="arena-panel" id="{root_id}-panel" aria-live="polite">
+                <div class="panel-title">Select a player</div>
+                <div class="panel-subtitle">Hover, focus, tap, or search to inspect player details.</div>
+                <div class="legend">
+                    <div class="legend-item"><span class="legend-dot" style="background:#e2bd45"></span>Gold marks the champion and top five</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#4fb7a4"></span>Teal outline means rank moved up</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#8f2e35"></span>Crimson outline means rank moved down</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#fff0b8"></span>Glow marks latest-game activity or winner</div>
+                </div>
+            </aside>
+        </div>
+        <script>
+            (function() {{
+                const root = document.getElementById("{root_id}");
+                if (!root) return;
+                const payloadEl = document.getElementById("{root_id}-data");
+                const payload = JSON.parse(payloadEl.textContent);
+                const players = payload.players || [];
+                const meta = payload.meta || {{}};
+                const stage = document.getElementById("{root_id}-stage");
+                const svg = document.getElementById("{root_id}-svg");
+                const tooltip = document.getElementById("{root_id}-tooltip");
+                const panel = document.getElementById("{root_id}-panel");
+                const searchInput = document.getElementById("{root_id}-search");
+                const clearButton = document.getElementById("{root_id}-clear");
+                const motionButton = document.getElementById("{root_id}-motion");
+                const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+                let motionOn = !prefersReduced;
+                let selectedId = null;
+                let animationFrame = null;
+                let startTime = performance.now();
+                let nodeSelection = new Map();
+                const svgns = "http://www.w3.org/2000/svg";
+
+                root.querySelector('[data-meta="period"]').textContent = meta.period || "Selected games";
+                root.querySelector('[data-meta="visible"]').textContent = String(meta.visiblePlayers || players.length);
+                root.querySelector('[data-meta="metric"]').textContent = meta.sizeMetric || "Total Score";
+                root.querySelector('[data-meta="latest"]').textContent = meta.latestGame || "N/A";
+                motionButton.setAttribute("aria-pressed", String(motionOn));
+                motionButton.textContent = motionOn ? "Motion on" : "Motion off";
+
+                function hashText(text) {{
+                    let hash = 2166136261;
+                    for (let i = 0; i < text.length; i += 1) {{
+                        hash ^= text.charCodeAt(i);
+                        hash = Math.imul(hash, 16777619);
+                    }}
+                    return hash >>> 0;
+                }}
+
+                function ringBounds(ringId, arenaRadius) {{
+                    const bounds = {{
+                        champion: [0, arenaRadius * 0.05],
+                        legends: [arenaRadius * 0.12, arenaRadius * 0.25],
+                        contenders: [arenaRadius * 0.27, arenaRadius * 0.45],
+                        challengers: [arenaRadius * 0.47, arenaRadius * 0.64],
+                        field: [arenaRadius * 0.66, arenaRadius * 0.91],
+                    }};
+                    return bounds[ringId] || bounds.field;
+                }}
+
+                function actualRadius(player, arenaRadius) {{
+                    const scale = Math.max(0.48, Math.min(0.90, arenaRadius / 430));
+                    const base = Number(player.radius) || 5;
+                    return Math.max(3.3, Math.min(26, base * scale));
+                }}
+
+                function formatOrdinal(value) {{
+                    if (value === null || value === undefined || value === "") return "N/A";
+                    const n = Number(value);
+                    if (!Number.isFinite(n)) return String(value);
+                    const suffix = (n % 100 >= 10 && n % 100 <= 20) ? "th" : ({{1:"st",2:"nd",3:"rd"}}[n % 10] || "th");
+                    return `${{n}}${{suffix}}`;
+                }}
+
+                function movementText(player) {{
+                    if (player.rankMovement === null || player.rankMovement === undefined) return "Not available";
+                    if (player.rankMovement > 0) return `Up ${{player.rankMovement}}`;
+                    if (player.rankMovement < 0) return `Down ${{Math.abs(player.rankMovement)}}`;
+                    return "No change";
+                }}
+
+                function movementClass(player) {{
+                    if (player.rankMovement === null || player.rankMovement === undefined) return "neutral";
+                    if (player.rankMovement > 0) return "up";
+                    if (player.rankMovement < 0) return "down";
+                    return "neutral";
+                }}
+
+                function playerTooltip(player) {{
+                    return `
+                        <strong>${{escapeHtml(player.name)}}</strong><br>
+                        Rank #${{player.rank}} | Score ${{player.score}}<br>
+                        Games: ${{player.gamesPlayed}} | Wins: ${{player.wins}}<br>
+                        Top 5: ${{player.topFiveFinishes}} | Latest: ${{formatOrdinal(player.latestFinish)}}<br>
+                        Movement: ${{movementText(player)}}
+                    `;
+                }}
+
+                function escapeHtml(value) {{
+                    return String(value)
+                        .replaceAll("&", "&amp;")
+                        .replaceAll("<", "&lt;")
+                        .replaceAll(">", "&gt;")
+                        .replaceAll('"', "&quot;")
+                        .replaceAll("'", "&#039;");
+                }}
+
+                function renderPanel(player) {{
+                    if (!player) {{
+                        panel.innerHTML = `
+                            <div class="panel-title">Select a player</div>
+                            <div class="panel-subtitle">Hover, focus, tap, or search to inspect player details.</div>
+                            <div class="legend">
+                                <div class="legend-item"><span class="legend-dot" style="background:#e2bd45"></span>Gold marks the champion and top five</div>
+                                <div class="legend-item"><span class="legend-dot" style="background:#4fb7a4"></span>Teal outline means rank moved up</div>
+                                <div class="legend-item"><span class="legend-dot" style="background:#8f2e35"></span>Crimson outline means rank moved down</div>
+                                <div class="legend-item"><span class="legend-dot" style="background:#fff0b8"></span>Glow marks latest-game activity or winner</div>
+                            </div>`;
+                        return;
+                    }}
+                    const form = (player.recentForm || []).map(formatOrdinal).join(" -> ") || "N/A";
+                    const previousRank = player.previousRank ? `#${{player.previousRank}}` : "N/A";
+                    panel.innerHTML = `
+                        <div class="panel-title">${{escapeHtml(player.name)}}</div>
+                        <div class="panel-subtitle">${{escapeHtml(player.ringLabel)}} | Newest recent form is on the right</div>
+                        <div class="panel-grid">
+                            <div class="panel-stat"><div class="panel-label">Rank</div><div class="panel-value">#${{player.rank}}/${{players.length}}</div></div>
+                            <div class="panel-stat"><div class="panel-label">Total score</div><div class="panel-value">${{player.score}}</div></div>
+                            <div class="panel-stat"><div class="panel-label">Games played</div><div class="panel-value">${{player.gamesPlayed}}</div></div>
+                            <div class="panel-stat"><div class="panel-label">Wins</div><div class="panel-value">${{player.wins}}</div></div>
+                            <div class="panel-stat"><div class="panel-label">Top 5 finishes</div><div class="panel-value">${{player.topFiveFinishes}}</div></div>
+                            <div class="panel-stat"><div class="panel-label">Best finish</div><div class="panel-value">${{formatOrdinal(player.bestFinish)}}</div></div>
+                            <div class="panel-stat"><div class="panel-label">Average finish</div><div class="panel-value">${{player.averageFinish ?? "N/A"}}</div></div>
+                            <div class="panel-stat"><div class="panel-label">Latest finish</div><div class="panel-value">${{formatOrdinal(player.latestFinish)}}</div></div>
+                            <div class="panel-stat"><div class="panel-label">Previous rank</div><div class="panel-value">${{previousRank}}</div></div>
+                            <div class="panel-stat"><div class="panel-label">Movement</div><div class="panel-value">${{movementText(player)}}</div></div>
+                        </div>
+                        <div class="panel-stat" style="margin-top:8px"><div class="panel-label">Recent form</div><div class="panel-value">${{form}}</div></div>
+                    `;
+                }}
+
+                function placePlayers(width, height) {{
+                    const cx = width / 2;
+                    const cy = height / 2;
+                    const arenaRadius = Math.min(width, height) * 0.48;
+                    const placed = [];
+                    const ordered = [...players].sort((a, b) => (b.radius - a.radius) || (a.rank - b.rank));
+
+                    for (const player of ordered) {{
+                        const radius = actualRadius(player, arenaRadius);
+                        player.renderRadius = radius;
+                        if (player.rank === 1) {{
+                            player.x = cx;
+                            player.y = cy;
+                            placed.push(player);
+                            continue;
+                        }}
+
+                        const [innerBase, outerBase] = ringBounds(player.ring, arenaRadius);
+                        const inner = innerBase + radius + 2;
+                        const outer = Math.max(inner + 1, outerBase - radius - 2);
+                        const seed = hashText(player.id || player.name);
+                        const baseAngle = (seed % 3600) / 3600 * Math.PI * 2;
+                        let best = null;
+                        let bestPenalty = Number.POSITIVE_INFINITY;
+
+                        for (let attempt = 0; attempt < 90; attempt += 1) {{
+                            const angle = baseAngle + attempt * 2.399963229728653;
+                            const fraction = ((seed >>> (attempt % 16)) + attempt * 37) % 1000 / 1000;
+                            const distance = inner + (outer - inner) * fraction;
+                            const x = cx + Math.cos(angle) * distance;
+                            const y = cy + Math.sin(angle) * distance;
+                            let penalty = 0;
+                            for (const other of placed) {{
+                                const dx = x - other.x;
+                                const dy = y - other.y;
+                                const minimumDistance = radius + other.renderRadius + 1.5;
+                                const distanceToOther = Math.hypot(dx, dy);
+                                if (distanceToOther < minimumDistance) {{
+                                    penalty += (minimumDistance - distanceToOther) ** 2;
+                                }}
+                            }}
+                            if (penalty < bestPenalty) {{
+                                bestPenalty = penalty;
+                                best = {{x, y}};
+                                if (penalty === 0) break;
+                            }}
+                        }}
+                        player.x = best.x;
+                        player.y = best.y;
+                        placed.push(player);
+                    }}
+                    return {{cx, cy, arenaRadius}};
+                }}
+
+                function clearSvg() {{
+                    while (svg.firstChild) svg.removeChild(svg.firstChild);
+                    nodeSelection.clear();
+                }}
+
+                function svgEl(tag, attrs = {{}}) {{
+                    const element = document.createElementNS(svgns, tag);
+                    Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, value));
+                    return element;
+                }}
+
+                function drawGuides(cx, cy, arenaRadius) {{
+                    const guideGroup = svgEl("g");
+                    const rings = [
+                        ["Champion's Core", "champion"],
+                        ["Legends' Ring", "legends"],
+                        ["Contenders' Ring", "contenders"],
+                        ["Challengers' Ring", "challengers"],
+                        ["The Field", "field"],
+                    ];
+                    rings.forEach(([label, id]) => {{
+                        const [, outer] = ringBounds(id, arenaRadius);
+                        guideGroup.appendChild(svgEl("circle", {{cx, cy, r: outer, class: "guide-circle"}}));
+                        if (arenaRadius > 230) {{
+                            const text = svgEl("text", {{x: cx + 8, y: cy - outer + 16, class: "guide-label"}});
+                            text.textContent = label;
+                            guideGroup.appendChild(text);
+                        }}
+                    }});
+                    const crest = svgEl("circle", {{cx, cy, r: Math.max(28, arenaRadius * 0.055), class: "arena-crest"}});
+                    guideGroup.appendChild(crest);
+                    const easy = svgEl("text", {{x: cx, y: cy + arenaRadius * 0.96, class: "guide-label", "text-anchor": "middle"}});
+                    easy.textContent = "EASY NOW.";
+                    guideGroup.appendChild(easy);
+                    svg.appendChild(guideGroup);
+                }}
+
+                function bubbleFill(player) {{
+                    if (player.rank === 1) return "url(#{root_id}-champion-gradient)";
+                    if (player.rank <= 5) return "url(#{root_id}-gold-gradient)";
+                    if (player.activeLatestGame) return "rgba(214, 175, 59, 0.58)";
+                    return "rgba(84, 81, 72, 0.78)";
+                }}
+
+                function bubbleStroke(player) {{
+                    const move = movementClass(player);
+                    if (player.isLatestWinner) return "#fff0b8";
+                    if (move === "up") return "#4fb7a4";
+                    if (move === "down") return "#8f2e35";
+                    if (player.rank <= 5) return "#fff0b8";
+                    return "rgba(214, 175, 59, 0.46)";
+                }}
+
+                function selectPlayer(player, shouldFocus = false) {{
+                    selectedId = player ? player.id : null;
+                    nodeSelection.forEach((node, id) => node.classList.toggle("is-selected", id === selectedId));
+                    renderPanel(player);
+                    if (player && shouldFocus) {{
+                        const node = nodeSelection.get(player.id);
+                        if (node) node.focus();
+                    }}
+                }}
+
+                function showTooltip(player, x, y) {{
+                    tooltip.innerHTML = playerTooltip(player);
+                    tooltip.style.display = "block";
+                    const stageRect = stage.getBoundingClientRect();
+                    const box = tooltip.getBoundingClientRect();
+                    const left = Math.max(8, Math.min(x + 12, stageRect.width - box.width - 8));
+                    const top = Math.max(8, Math.min(y + 12, stageRect.height - box.height - 8));
+                    tooltip.style.left = `${{left}}px`;
+                    tooltip.style.top = `${{top}}px`;
+                }}
+
+                function hideTooltip() {{
+                    tooltip.style.display = "none";
+                }}
+
+                function drawBubbles() {{
+                    const bubbleGroup = svgEl("g");
+                    players.forEach((player) => {{
+                        const group = svgEl("g", {{
+                            class: "bubble",
+                            role: "button",
+                            tabindex: "0",
+                            "aria-label": `${{player.name}}, rank ${{player.rank}}, total score ${{player.score}}`,
+                            transform: `translate(${{player.x}}, ${{player.y}})`
+                        }});
+                        group.dataset.id = player.id;
+                        const circle = svgEl("circle", {{
+                            r: player.renderRadius,
+                            fill: bubbleFill(player),
+                            stroke: bubbleStroke(player)
+                        }});
+                        if (player.activeLatestGame || player.isLatestWinner) {{
+                            circle.setAttribute("filter", "url(#{root_id}-soft-glow)");
+                        }}
+                        group.appendChild(circle);
+
+                        if (player.rank === 1) {{
+                            const symbol = svgEl("text", {{x: 0, y: -player.renderRadius - 4, class: "bubble-symbol"}});
+                            symbol.textContent = "♛";
+                            group.appendChild(symbol);
+                        }}
+
+                        const shouldLabel = player.rank === 1 || player.rank <= 5 || (player.renderRadius >= 18 && player.rank <= 50);
+                        if (shouldLabel) {{
+                            const label = svgEl("text", {{
+                                x: 0,
+                                y: 3,
+                                class: player.rank <= 5 ? "bubble-name" : "bubble-name is-light"
+                            }});
+                            const shortName = player.name.length > 12 ? `${{player.name.slice(0, 10)}}…` : player.name;
+                            label.textContent = shortName;
+                            group.appendChild(label);
+                        }}
+
+                        group.addEventListener("pointerenter", () => {{
+                            const rect = stage.getBoundingClientRect();
+                            showTooltip(player, player.x, player.y);
+                        }});
+                        group.addEventListener("pointerleave", hideTooltip);
+                        group.addEventListener("focus", () => showTooltip(player, player.x, player.y));
+                        group.addEventListener("blur", hideTooltip);
+                        group.addEventListener("click", (event) => {{
+                            event.stopPropagation();
+                            selectPlayer(player, false);
+                        }});
+                        group.addEventListener("keydown", (event) => {{
+                            if (event.key === "Enter" || event.key === " ") {{
+                                event.preventDefault();
+                                selectPlayer(player, false);
+                            }}
+                        }});
+
+                        nodeSelection.set(player.id, group);
+                        bubbleGroup.appendChild(group);
+                    }});
+                    svg.appendChild(bubbleGroup);
+                }}
+
+                function render() {{
+                    const width = Math.max(320, stage.clientWidth);
+                    const height = Math.max(stage.clientHeight, width < 560 ? 430 : width < 900 ? 560 : 680);
+                    svg.setAttribute("viewBox", `0 0 ${{width}} ${{height}}`);
+                    clearSvg();
+
+                    const defs = svgEl("defs");
+                    defs.innerHTML = `
+                        <radialGradient id="{root_id}-champion-gradient">
+                            <stop offset="0%" stop-color="#fff0b8"></stop>
+                            <stop offset="52%" stop-color="#d6af3b"></stop>
+                            <stop offset="100%" stop-color="#7b5a16"></stop>
+                        </radialGradient>
+                        <radialGradient id="{root_id}-gold-gradient">
+                            <stop offset="0%" stop-color="#f1cf66"></stop>
+                            <stop offset="100%" stop-color="#a1741b"></stop>
+                        </radialGradient>
+                        <filter id="{root_id}-soft-glow" x="-80%" y="-80%" width="260%" height="260%">
+                            <feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="#f1cf66" flood-opacity="0.72"></feDropShadow>
+                        </filter>
+                    `;
+                    svg.appendChild(defs);
+
+                    const layout = placePlayers(width, height);
+                    drawGuides(layout.cx, layout.cy, layout.arenaRadius);
+                    drawBubbles();
+                    applySearch(searchInput.value || "");
+                    if (selectedId) {{
+                        const selectedPlayer = players.find((player) => player.id === selectedId);
+                        selectPlayer(selectedPlayer || null, false);
+                    }}
+                }}
+
+                function applySearch(query) {{
+                    const text = String(query || "").trim().toLocaleLowerCase();
+                    let firstMatch = null;
+                    players.forEach((player) => {{
+                        const matches = text && player.name.toLocaleLowerCase().includes(text);
+                        const node = nodeSelection.get(player.id);
+                        if (!node) return;
+                        node.classList.toggle("is-muted", Boolean(text) && !matches);
+                        if (matches && !firstMatch) firstMatch = player;
+                    }});
+                    if (firstMatch) {{
+                        selectPlayer(firstMatch, true);
+                    }} else if (!text) {{
+                        selectPlayer(null, false);
+                    }}
+                }}
+
+                function animate(now) {{
+                    if (!motionOn) return;
+                    const elapsed = (now - startTime) / 1000;
+                    players.forEach((player) => {{
+                        const node = nodeSelection.get(player.id);
+                        if (!node) return;
+                        const seed = hashText(player.id);
+                        const drift = player.rank === 1 ? 0.9 : 1.8;
+                        const dx = Math.sin(elapsed * 0.35 + seed * 0.0003) * drift;
+                        const dy = Math.cos(elapsed * 0.28 + seed * 0.0002) * drift;
+                        node.setAttribute("transform", `translate(${{player.x + dx}}, ${{player.y + dy}})`);
+                    }});
+                    animationFrame = requestAnimationFrame(animate);
+                }}
+
+                function setMotion(nextValue) {{
+                    motionOn = Boolean(nextValue);
+                    motionButton.setAttribute("aria-pressed", String(motionOn));
+                    motionButton.textContent = motionOn ? "Motion on" : "Motion off";
+                    if (animationFrame) cancelAnimationFrame(animationFrame);
+                    animationFrame = null;
+                    if (motionOn) {{
+                        startTime = performance.now();
+                        animationFrame = requestAnimationFrame(animate);
+                    }} else {{
+                        players.forEach((player) => {{
+                            const node = nodeSelection.get(player.id);
+                            if (node) node.setAttribute("transform", `translate(${{player.x}}, ${{player.y}})`);
+                        }});
+                    }}
+                }}
+
+                searchInput.addEventListener("input", () => applySearch(searchInput.value));
+                clearButton.addEventListener("click", () => {{
+                    searchInput.value = "";
+                    applySearch("");
+                    selectPlayer(null, false);
+                    hideTooltip();
+                }});
+                motionButton.addEventListener("click", () => setMotion(!motionOn));
+                stage.addEventListener("click", () => selectPlayer(null, false));
+
+                const resizeObserver = new ResizeObserver(() => {{
+                    if (animationFrame) cancelAnimationFrame(animationFrame);
+                    render();
+                    setMotion(motionOn);
+                }});
+                resizeObserver.observe(stage);
+
+                render();
+                setMotion(motionOn);
+                window.addEventListener("pagehide", () => {{
+                    if (animationFrame) cancelAnimationFrame(animationFrame);
+                    resizeObserver.disconnect();
+                }});
+            }})();
+        </script>
+    </div>
+    """
+
+    components.html(html, height=920, scrolling=False)
+
+
 def style_leaderboard_table(table):
     """Apply a softer, easier-to-read style to leaderboard tables."""
     if table.empty:
@@ -1690,8 +2777,8 @@ def main():
 
     all_games_leaderboard, _ = build_leaderboard(games)
 
-    overall_tab, monthly_tab, player_tab, analytics_tab = st.tabs(
-        ["Overall Leaderboard", "Monthly View", "Player Search", "Analytics"]
+    overall_tab, bubble_tab, monthly_tab, player_tab, analytics_tab = st.tabs(
+        ["Overall Leaderboard", "Bubble Arena", "Monthly View", "Player Search", "Analytics"]
     )
 
     with overall_tab:
@@ -1702,6 +2789,10 @@ def main():
             show_weeks,
             export_button_key="overall_leaderboard_csv_export",
         )
+
+    with bubble_tab:
+        show_summary_cards(overall_leaderboard, len(overall_games), overall_entries)
+        show_bubble_arena(overall_leaderboard, overall_games)
 
     with monthly_tab:
         if not monthly_options:
