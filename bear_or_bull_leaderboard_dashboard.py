@@ -1443,6 +1443,8 @@ def show_bubble_arena(leaderboard, games):
                 gap: 8px;
                 align-items: end;
                 flex-wrap: wrap;
+                justify-content: flex-end;
+                flex: 0 1 auto;
             }}
 
             #{root_id} button {{
@@ -1480,14 +1482,15 @@ def show_bubble_arena(leaderboard, games):
 
             #{root_id} .arena-layout {{
                 display: grid;
-                grid-template-columns: minmax(0, 1fr) minmax(260px, 330px);
+                grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
                 gap: 12px;
                 align-items: stretch;
             }}
 
             #{root_id} .arena-stage {{
                 position: relative;
-                min-height: 680px;
+                height: 720px;
+                min-height: 0;
                 border: 1px solid rgba(214, 175, 59, 0.28);
                 border-radius: 8px;
                 overflow: hidden;
@@ -1593,7 +1596,8 @@ def show_bubble_arena(leaderboard, games):
                     radial-gradient(circle at top right, rgba(214, 175, 59, 0.12), transparent 36%),
                     linear-gradient(180deg, rgba(18, 15, 9, 0.96), rgba(6, 6, 6, 0.98));
                 padding: 12px;
-                min-height: 680px;
+                min-height: 0;
+                overflow: hidden;
             }}
 
             #{root_id} .panel-title {{
@@ -1608,6 +1612,7 @@ def show_bubble_arena(leaderboard, games):
                 color: var(--arena-muted);
                 font-size: 12px;
                 margin-bottom: 11px;
+                overflow-wrap: anywhere;
             }}
 
             #{root_id} .panel-grid {{
@@ -1641,17 +1646,20 @@ def show_bubble_arena(leaderboard, games):
 
             #{root_id} .legend {{
                 display: grid;
-                grid-template-columns: repeat(2, minmax(0, 1fr));
+                grid-template-columns: 1fr;
                 gap: 6px;
                 margin-top: 10px;
             }}
 
             #{root_id} .legend-item {{
-                display: flex;
+                display: grid;
+                grid-template-columns: 12px minmax(0, 1fr);
                 gap: 6px;
-                align-items: center;
+                align-items: start;
                 color: var(--arena-muted);
                 font-size: 11px;
+                line-height: 1.25;
+                overflow-wrap: anywhere;
             }}
 
             #{root_id} .legend-dot {{
@@ -1677,7 +1685,7 @@ def show_bubble_arena(leaderboard, games):
                     grid-template-columns: 1fr;
                 }}
                 #{root_id} .arena-stage {{
-                    min-height: 560px;
+                    height: 560px;
                 }}
                 #{root_id} .arena-panel {{
                     min-height: 0;
@@ -1686,7 +1694,7 @@ def show_bubble_arena(leaderboard, games):
 
             @media (max-width: 560px) {{
                 #{root_id} .arena-stage {{
-                    min-height: 430px;
+                    height: 430px;
                 }}
                 #{root_id} .panel-grid,
                 #{root_id} .legend {{
@@ -2055,7 +2063,12 @@ def show_bubble_arena(leaderboard, games):
 
                 function render() {{
                     const width = Math.max(320, stage.clientWidth);
-                    const height = Math.max(stage.clientHeight, width < 560 ? 430 : width < 900 ? 560 : 680);
+                    const height = Math.round(
+                        width < 560
+                            ? 430
+                            : Math.max(560, Math.min(720, width * 0.58))
+                    );
+                    stage.style.height = `${{height}}px`;
                     svg.setAttribute("viewBox", `0 0 ${{width}} ${{height}}`);
                     clearSvg();
 
