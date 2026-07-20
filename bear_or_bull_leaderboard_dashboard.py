@@ -1383,6 +1383,44 @@ def show_bubble_arena(leaderboard, games):
     payload_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     root_hash = hashlib.sha1(payload_json.encode("utf-8")).hexdigest()[:10]
     root_id = f"bubble-arena-{root_hash}"
+    arena_guide_html = """
+        <div class="panel-title">How to read the arena</div>
+        <div class="panel-subtitle">Click any bubble to open that player's details.</div>
+        <div class="legend">
+            <div class="legend-heading">Bubble fill</div>
+            <div class="legend-item">
+                <span class="legend-bubble fill-top">♛</span>
+                <span class="legend-copy"><strong>Bright gold</strong><small>Top 5 players; the crown marks #1</small></span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-bubble fill-latest"></span>
+                <span class="legend-copy"><strong>Warm gold</strong><small>Played in the latest loaded game</small></span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-bubble fill-standard"></span>
+                <span class="legend-copy"><strong>Charcoal</strong><small>All other players</small></span>
+            </div>
+            <div class="legend-heading">Bubble outline</div>
+            <div class="legend-item">
+                <span class="legend-bubble outline-up">↑</span>
+                <span class="legend-copy"><strong>Teal</strong><small>Rank moved up</small></span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-bubble outline-down">↓</span>
+                <span class="legend-copy"><strong>Crimson</strong><small>Rank moved down</small></span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-bubble outline-steady">•</span>
+                <span class="legend-copy"><strong>Bronze</strong><small>No change or no comparison yet</small></span>
+            </div>
+            <div class="legend-heading">Latest game</div>
+            <div class="legend-item">
+                <span class="legend-bubble latest-glow"></span>
+                <span class="legend-copy"><strong>Pale glow</strong><small>Latest-game activity; a pale rim marks its winner</small></span>
+            </div>
+        </div>
+        <div class="legend-rule"><strong>Ring</strong> = overall rank group<br><strong>Size</strong> = metric selected above</div>
+    """
 
     html = f"""
     <div id="{root_id}" class="bubble-arena-shell">
@@ -1696,27 +1734,119 @@ def show_bubble_arena(leaderboard, games):
             #{root_id} .legend {{
                 display: grid;
                 grid-template-columns: 1fr;
-                gap: 6px;
-                margin-top: 10px;
+                gap: 8px;
+                margin-top: 9px;
+            }}
+
+            #{root_id} .legend-heading {{
+                border-top: 1px solid rgba(214, 175, 59, 0.14);
+                color: var(--arena-gold);
+                font-size: 10px;
+                font-weight: 900;
+                letter-spacing: 0.08em;
+                padding-top: 8px;
+                text-transform: uppercase;
+            }}
+
+            #{root_id} .legend-heading:first-child {{
+                border-top: 0;
+                padding-top: 0;
             }}
 
             #{root_id} .legend-item {{
                 display: grid;
-                grid-template-columns: 12px minmax(0, 1fr);
-                gap: 6px;
-                align-items: start;
+                grid-template-columns: 24px minmax(0, 1fr);
+                gap: 9px;
+                align-items: center;
+            }}
+
+            #{root_id} .legend-bubble {{
+                width: 22px;
+                height: 22px;
+                border-radius: 999px;
+                border: 2px solid rgba(168, 132, 48, 0.76);
+                background: #35332e;
+                color: var(--arena-gold-pale);
+                display: grid;
+                place-items: center;
+                font-family: Georgia, serif;
+                font-size: 12px;
+                font-weight: 900;
+                line-height: 1;
+                box-sizing: border-box;
+            }}
+
+            #{root_id} .fill-top {{
+                border-color: #fff0b8;
+                background: radial-gradient(circle at 35% 30%, #f8d96f, #b58419 70%);
+                color: #2b1a02;
+                box-shadow: 0 0 9px rgba(241, 207, 102, 0.42);
+            }}
+
+            #{root_id} .fill-latest {{
+                border-color: #c8a643;
+                background: radial-gradient(circle at 35% 30%, #d4b548, #6f581b 72%);
+                box-shadow: 0 0 8px rgba(241, 207, 102, 0.34);
+            }}
+
+            #{root_id} .fill-standard {{
+                border-color: #8f7340;
+                background: #35332e;
+            }}
+
+            #{root_id} .outline-up {{
+                border-color: var(--arena-teal);
+                color: var(--arena-teal);
+            }}
+
+            #{root_id} .outline-down {{
+                border-color: var(--arena-crimson);
+                color: #d76169;
+            }}
+
+            #{root_id} .outline-steady {{
+                border-color: #8f7340;
+                color: #b69858;
+            }}
+
+            #{root_id} .latest-glow {{
+                border-color: var(--arena-gold-pale);
+                background: radial-gradient(circle at 35% 30%, #c6a73c, #4c411f 74%);
+                box-shadow: 0 0 4px #fff0b8, 0 0 11px rgba(241, 207, 102, 0.68);
+            }}
+
+            #{root_id} .legend-copy {{
+                display: grid;
+                gap: 1px;
+                min-width: 0;
+            }}
+
+            #{root_id} .legend-copy strong {{
+                color: var(--arena-text);
+                font-size: 12px;
+                line-height: 1.2;
+            }}
+
+            #{root_id} .legend-copy small {{
                 color: var(--arena-muted);
-                font-size: 11px;
+                font-size: 10px;
                 line-height: 1.25;
                 overflow-wrap: anywhere;
             }}
 
-            #{root_id} .legend-dot {{
-                width: 12px;
-                height: 12px;
-                border-radius: 999px;
-                border: 1px solid rgba(241, 207, 102, 0.45);
-                flex: 0 0 auto;
+            #{root_id} .legend-rule {{
+                border: 1px solid rgba(214, 175, 59, 0.19);
+                border-radius: 7px;
+                background: rgba(214, 175, 59, 0.055);
+                color: var(--arena-muted);
+                font-size: 10px;
+                line-height: 1.5;
+                margin-top: 11px;
+                padding: 8px 9px;
+            }}
+
+            #{root_id} .legend-rule strong {{
+                color: var(--arena-gold-bright);
             }}
 
             #{root_id} .empty-state {{
@@ -1788,14 +1918,7 @@ def show_bubble_arena(leaderboard, games):
                 <div class="arena-tooltip" id="{root_id}-tooltip"></div>
             </div>
             <aside class="arena-panel" id="{root_id}-panel" aria-live="polite">
-                <div class="panel-title">Select a player</div>
-                <div class="panel-subtitle">Hover, focus, tap, or search to inspect player details.</div>
-                <div class="legend">
-                    <div class="legend-item"><span class="legend-dot" style="background:#e2bd45"></span>Gold marks the champion and top five</div>
-                    <div class="legend-item"><span class="legend-dot" style="background:#4fb7a4"></span>Teal outline means rank moved up</div>
-                    <div class="legend-item"><span class="legend-dot" style="background:#8f2e35"></span>Crimson outline means rank moved down</div>
-                    <div class="legend-item"><span class="legend-dot" style="background:#fff0b8"></span>Glow marks latest-game activity or winner</div>
-                </div>
+                {arena_guide_html}
             </aside>
         </div>
         <script>
@@ -1918,15 +2041,7 @@ def show_bubble_arena(leaderboard, games):
 
                 function renderPanel(player) {{
                     if (!player) {{
-                        panel.innerHTML = `
-                            <div class="panel-title">Select a player</div>
-                            <div class="panel-subtitle">Hover, focus, tap, or search to inspect player details.</div>
-                            <div class="legend">
-                                <div class="legend-item"><span class="legend-dot" style="background:#e2bd45"></span>Gold marks the champion and top five</div>
-                                <div class="legend-item"><span class="legend-dot" style="background:#4fb7a4"></span>Teal outline means rank moved up</div>
-                                <div class="legend-item"><span class="legend-dot" style="background:#8f2e35"></span>Crimson outline means rank moved down</div>
-                                <div class="legend-item"><span class="legend-dot" style="background:#fff0b8"></span>Glow marks latest-game activity or winner</div>
-                            </div>`;
+                        panel.innerHTML = `{arena_guide_html}`;
                         return;
                     }}
                     const form = (player.recentForm || []).map(formatOrdinal).join(" -> ") || "N/A";
