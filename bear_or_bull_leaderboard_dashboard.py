@@ -1538,19 +1538,29 @@ def show_bubble_arena(leaderboard, games):
 
             #{root_id} .guide-label {{
                 fill: var(--arena-gold-pale);
-                font-size: 13px;
+                font-size: 11px;
                 font-weight: 900;
-                letter-spacing: 0.08em;
+                letter-spacing: 0.14em;
                 text-transform: uppercase;
                 paint-order: stroke;
                 stroke: rgba(0, 0, 0, 0.94);
-                stroke-width: 4px;
+                stroke-width: 3px;
             }}
 
             #{root_id} .guide-label-badge {{
-                fill: rgba(5, 5, 5, 0.94);
-                stroke: rgba(241, 207, 102, 0.72);
-                stroke-width: 1.4;
+                fill: url(#{root_id}-label-gradient);
+                stroke: rgba(241, 207, 102, 0.78);
+                stroke-width: 1;
+                filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.72));
+            }}
+
+            #{root_id} .guide-label-line {{
+                stroke: rgba(241, 207, 102, 0.62);
+                stroke-width: 1;
+            }}
+
+            #{root_id} .guide-label-jewel {{
+                fill: var(--arena-gold-bright);
             }}
 
             #{root_id} .guide-label-layer {{
@@ -1858,8 +1868,8 @@ def show_bubble_arena(leaderboard, games):
                     const minimumByRing = {{
                         champion: 26,
                         legends: 21,
-                        contenders: 17,
-                        challengers: 14
+                        contenders: 18,
+                        challengers: 15
                     }};
                     const minimum = (minimumByRing[player.ring] || 8) * legibilityScale;
                     return Math.max(minimum, Math.min(26, base * scale));
@@ -2103,24 +2113,49 @@ def show_bubble_arena(leaderboard, games):
                 function drawGuideLabels(cx, cy, arenaRadius) {{
                     if (arenaRadius <= 230) return;
                     const labelGroup = svgEl("g", {{class: "guide-label-layer"}});
-                    guideDefinitions().forEach(([label, id]) => {{
+                    guideDefinitions().filter(([, id]) => id !== "champion").forEach(([label, id]) => {{
                         const [, outer] = ringBounds(id, arenaRadius);
-                        const labelWidth = Math.max(116, label.length * 8.5);
+                        const labelWidth = Math.max(96, label.length * 7.3);
                         const labelX = cx - labelWidth / 2;
-                        const labelY = id === "champion"
-                            ? cy - Math.max(50, arenaRadius * 0.145)
-                            : cy - outer + 8;
+                        const labelY = cy - outer + 8;
+                        const labelMidY = labelY + 9;
+                        labelGroup.appendChild(svgEl("line", {{
+                            x1: labelX - 18,
+                            y1: labelMidY,
+                            x2: labelX - 4,
+                            y2: labelMidY,
+                            class: "guide-label-line"
+                        }}));
+                        labelGroup.appendChild(svgEl("line", {{
+                            x1: labelX + labelWidth + 4,
+                            y1: labelMidY,
+                            x2: labelX + labelWidth + 18,
+                            y2: labelMidY,
+                            class: "guide-label-line"
+                        }}));
+                        labelGroup.appendChild(svgEl("circle", {{
+                            cx: labelX - 20,
+                            cy: labelMidY,
+                            r: 1.8,
+                            class: "guide-label-jewel"
+                        }}));
+                        labelGroup.appendChild(svgEl("circle", {{
+                            cx: labelX + labelWidth + 20,
+                            cy: labelMidY,
+                            r: 1.8,
+                            class: "guide-label-jewel"
+                        }}));
                         labelGroup.appendChild(svgEl("rect", {{
                             x: labelX,
                             y: labelY,
                             width: labelWidth,
-                            height: 22,
-                            rx: 11,
+                            height: 18,
+                            rx: 4,
                             class: "guide-label-badge"
                         }}));
                         const text = svgEl("text", {{
                             x: cx,
-                            y: labelY + 15,
+                            y: labelY + 12.5,
                             class: "guide-label",
                             "text-anchor": "middle"
                         }});
@@ -2228,28 +2263,41 @@ def show_bubble_arena(leaderboard, games):
 
                         const shouldLabel = player.rank <= 50;
                         if (shouldLabel) {{
-                            const fontSize = clamp(player.renderRadius * 0.52, 7, player.rank <= 5 ? 10 : 9);
-                            const maxTextWidth = Math.max(14, player.renderRadius * 1.62);
+                            const fontSize = clamp(player.renderRadius * 0.50, 6.4, player.rank <= 5 ? 10 : 9);
+                            const maxTextWidth = Math.max(16, player.renderRadius * 1.72);
                             const characters = Array.from(player.name);
                             const estimatedCharacterWidth = fontSize * 0.54;
-                            const maxCharacters = Math.max(3, Math.floor(maxTextWidth / estimatedCharacterWidth));
-                            const visibleCharacters = characters.length > maxCharacters
-                                ? [...characters.slice(0, Math.max(2, maxCharacters - 1)), "…"]
-                                : characters;
-                            const visibleName = visibleCharacters.join("");
+                            const estimatedFullWidth = characters.length * estimatedCharacterWidth;
+                            const lineCount = clamp(Math.ceil(estimatedFullWidth / maxTextWidth), 1, 3);
+                            const charactersPerLine = Math.ceil(characters.length / lineCount);
+                            const nameLines = [];
+                            for (let lineIndex = 0; lineIndex < lineCount; lineIndex += 1) {{
+                                nameLines.push(characters.slice(
+                                    lineIndex * charactersPerLine,
+                                    (lineIndex + 1) * charactersPerLine
+                                ));
+                            }}
                             const label = svgEl("text", {{
                                 x: 0,
-                                y: 3,
                                 class: player.rank <= 5 ? "bubble-name" : "bubble-name is-light",
                                 "aria-hidden": "true"
                             }});
                             label.style.fontSize = `${{fontSize}}px`;
-                            label.textContent = visibleName;
-                            const estimatedTextWidth = visibleCharacters.length * estimatedCharacterWidth;
-                            if (estimatedTextWidth > maxTextWidth) {{
-                                label.setAttribute("textLength", maxTextWidth);
-                                label.setAttribute("lengthAdjust", "spacingAndGlyphs");
-                            }}
+                            const lineHeight = fontSize * 0.82;
+                            const firstBaseline = 2.5 - ((nameLines.length - 1) * lineHeight) / 2;
+                            nameLines.forEach((lineCharacters, lineIndex) => {{
+                                const tspan = svgEl("tspan", {{
+                                    x: 0,
+                                    y: firstBaseline + lineIndex * lineHeight
+                                }});
+                                tspan.textContent = lineCharacters.join("");
+                                const estimatedLineWidth = lineCharacters.length * estimatedCharacterWidth;
+                                if (estimatedLineWidth > maxTextWidth) {{
+                                    tspan.setAttribute("textLength", maxTextWidth);
+                                    tspan.setAttribute("lengthAdjust", "spacingAndGlyphs");
+                                }}
+                                label.appendChild(tspan);
+                            }});
                             group.appendChild(label);
                         }}
 
@@ -2309,6 +2357,11 @@ def show_bubble_arena(leaderboard, games):
                             <stop offset="0%" stop-color="#f1cf66"></stop>
                             <stop offset="100%" stop-color="#a1741b"></stop>
                         </radialGradient>
+                        <linearGradient id="{root_id}-label-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stop-color="#090702"></stop>
+                            <stop offset="50%" stop-color="#2c210a"></stop>
+                            <stop offset="100%" stop-color="#090702"></stop>
+                        </linearGradient>
                         <filter id="{root_id}-soft-glow" x="-80%" y="-80%" width="260%" height="260%">
                             <feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="#f1cf66" flood-opacity="0.72"></feDropShadow>
                         </filter>
