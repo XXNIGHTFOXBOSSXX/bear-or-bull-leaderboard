@@ -1516,6 +1516,12 @@ def show_bubble_arena(leaderboard, games):
                     linear-gradient(145deg, rgba(19, 16, 10, 0.95), rgba(2, 2, 2, 0.97));
                 box-shadow: inset 0 0 74px rgba(0, 0, 0, 0.56), 0 18px 44px rgba(0, 0, 0, 0.28);
                 touch-action: none;
+                cursor: grab;
+                user-select: none;
+            }}
+
+            #{root_id} .arena-stage.is-dragging {{
+                cursor: grabbing;
             }}
 
             #{root_id} svg {{
@@ -1556,11 +1562,6 @@ def show_bubble_arena(leaderboard, games):
             #{root_id} .bubble {{
                 cursor: pointer;
                 transition: opacity 180ms ease, filter 180ms ease;
-            }}
-
-            #{root_id} .arena-scene {{
-                transform-box: fill-box;
-                transform-origin: center;
             }}
 
             #{root_id} .bubble circle {{
@@ -1808,6 +1809,8 @@ def show_bubble_arena(leaderboard, games):
                 let sceneGroup = null;
                 const viewport = {{width: 0, height: 0, zoom: 1, focusX: null, focusY: null}};
                 let viewportMode = "fit";
+                let dragState = null;
+                let suppressClick = false;
                 const svgns = "http://www.w3.org/2000/svg";
 
                 root.querySelector('[data-meta="period"]').textContent = meta.period || "Selected games";
@@ -1934,6 +1937,8 @@ def show_bubble_arena(leaderboard, games):
                         if (player.rank === 1) {{
                             player.x = cx;
                             player.y = cy;
+                            player.currentX = player.x;
+                            player.currentY = player.y;
                             placed.push(player);
                             continue;
                         }}
@@ -1971,6 +1976,8 @@ def show_bubble_arena(leaderboard, games):
                         }}
                         player.x = best.x;
                         player.y = best.y;
+                        player.currentX = player.x;
+                        player.currentY = player.y;
                         placed.push(player);
                     }}
                     return {{cx, cy, arenaRadius}};
@@ -1992,15 +1999,16 @@ def show_bubble_arena(leaderboard, games):
                 }}
 
                 function applyViewport() {{
-                    if (!sceneGroup) return;
+                    if (!svg || !viewport.width || !viewport.height) return;
                     const centerX = viewport.width / 2;
                     const centerY = viewport.height / 2;
                     const focusX = viewport.focusX ?? centerX;
                     const focusY = viewport.focusY ?? centerY;
-                    sceneGroup.setAttribute(
-                        "transform",
-                        `translate(${{centerX}}, ${{centerY}}) scale(${{viewport.zoom}}) translate(${{-focusX}}, ${{-focusY}})`
-                    );
+                    const visibleWidth = viewport.width / viewport.zoom;
+                    const visibleHeight = viewport.height / viewport.zoom;
+                    const viewX = focusX - visibleWidth / 2;
+                    const viewY = focusY - visibleHeight / 2;
+                    svg.setAttribute("viewBox", `${{viewX}} ${{viewY}} ${{visibleWidth}} ${{visibleHeight}}`);
                     zoomSlider.value = String(Math.round(viewport.zoom * 100));
                     zoomValue.textContent = `${{Math.round(viewport.zoom * 100)}}%`;
                 }}
@@ -2009,15 +2017,22 @@ def show_bubble_arena(leaderboard, games):
                     return selectedId ? players.find((player) => player.id === selectedId) : null;
                 }}
 
+                function playerPosition(player) {{
+                    return {{
+                        x: player.currentX ?? player.x,
+                        y: player.currentY ?? player.y
+                    }};
+                }}
+
                 function setZoom(nextZoom, focusPlayer = null) {{
                     viewport.zoom = clamp(nextZoom, 0.7, 1.9);
                     const anchorPlayer = focusPlayer || selectedPlayer();
                     if (anchorPlayer) {{
+                        const position = playerPosition(anchorPlayer);
                         viewportMode = "player";
-                        viewport.focusX = anchorPlayer.x;
-                        viewport.focusY = anchorPlayer.y;
-                    }} else {{
-                        viewportMode = "fit";
+                        viewport.focusX = position.x;
+                        viewport.focusY = position.y;
+                    }} else if (viewport.focusX === null || viewport.focusY === null) {{
                         viewport.focusX = viewport.width / 2;
                         viewport.focusY = viewport.height / 2;
                     }}
@@ -2094,15 +2109,18 @@ def show_bubble_arena(leaderboard, games):
                     nodeSelection.forEach((node, id) => node.classList.toggle("is-selected", id === selectedId));
                     renderPanel(player);
                     if (player) {{
+                        const position = playerPosition(player);
                         viewportMode = "player";
-                        viewport.focusX = player.x;
-                        viewport.focusY = player.y;
+                        viewport.focusX = position.x;
+                        viewport.focusY = position.y;
+                        applyViewport();
+                    }} else if (viewportMode === "player") {{
+                        viewportMode = "fit";
+                        viewport.focusX = viewport.width / 2;
+                        viewport.focusY = viewport.height / 2;
                         applyViewport();
                     }}
                     if (player && shouldFocus) {{
-                        viewportMode = "player";
-                        viewport.focusX = player.x;
-                        viewport.focusY = player.y;
                         setZoom(Math.max(viewport.zoom, 1.35), player);
                         const node = nodeSelection.get(player.id);
                         if (node) node.focus();
@@ -2110,13 +2128,14 @@ def show_bubble_arena(leaderboard, games):
                 }}
 
                 function scenePointToStage(x, y) {{
-                    const centerX = viewport.width / 2;
-                    const centerY = viewport.height / 2;
-                    const focusX = viewport.focusX ?? centerX;
-                    const focusY = viewport.focusY ?? centerY;
+                    const stageRect = stage.getBoundingClientRect();
+                    const visibleWidth = viewport.width / viewport.zoom;
+                    const visibleHeight = viewport.height / viewport.zoom;
+                    const viewX = (viewport.focusX ?? viewport.width / 2) - visibleWidth / 2;
+                    const viewY = (viewport.focusY ?? viewport.height / 2) - visibleHeight / 2;
                     return {{
-                        x: centerX + (x - focusX) * viewport.zoom,
-                        y: centerY + (y - focusY) * viewport.zoom
+                        x: (x - viewX) * stageRect.width / visibleWidth,
+                        y: (y - viewY) * stageRect.height / visibleHeight
                     }};
                 }}
 
@@ -2186,6 +2205,7 @@ def show_bubble_arena(leaderboard, games):
                         group.addEventListener("blur", hideTooltip);
                         group.addEventListener("click", (event) => {{
                             event.stopPropagation();
+                            if (suppressClick) return;
                             selectPlayer(player, false);
                         }});
                         group.addEventListener("keydown", (event) => {{
@@ -2208,6 +2228,10 @@ def show_bubble_arena(leaderboard, games):
                             ? 430
                             : Math.max(640, Math.min(800, width * 0.55))
                     );
+                    const previousWidth = viewport.width || width;
+                    const previousHeight = viewport.height || height;
+                    const focusRatioX = (viewport.focusX ?? previousWidth / 2) / previousWidth;
+                    const focusRatioY = (viewport.focusY ?? previousHeight / 2) / previousHeight;
                     stage.style.height = `${{height}}px`;
                     svg.setAttribute("viewBox", `0 0 ${{width}} ${{height}}`);
                     clearSvg();
@@ -2235,6 +2259,9 @@ def show_bubble_arena(leaderboard, games):
                     if (viewportMode === "fit" || viewport.focusX === null || viewport.focusY === null) {{
                         viewport.focusX = layout.cx;
                         viewport.focusY = layout.cy;
+                    }} else if (viewportMode === "free") {{
+                        viewport.focusX = focusRatioX * width;
+                        viewport.focusY = focusRatioY * height;
                     }}
                     sceneGroup = svgEl("g", {{class: "arena-scene"}});
                     svg.appendChild(sceneGroup);
@@ -2244,8 +2271,9 @@ def show_bubble_arena(leaderboard, games):
                     if (selectedId) {{
                         const selectedPlayer = players.find((player) => player.id === selectedId);
                         if (selectedPlayer && viewportMode === "player") {{
-                            viewport.focusX = selectedPlayer.x;
-                            viewport.focusY = selectedPlayer.y;
+                            const position = playerPosition(selectedPlayer);
+                            viewport.focusX = position.x;
+                            viewport.focusY = position.y;
                         }}
                         selectPlayer(selectedPlayer || null, false);
                     }}
@@ -2294,8 +2322,17 @@ def show_bubble_arena(leaderboard, games):
                         const speed = speedByRing[player.ring] || 0.34;
                         const dx = Math.sin(elapsed * speed + seed * 0.0003) * drift;
                         const dy = Math.cos(elapsed * (speed * 0.82) + seed * 0.0002) * drift;
-                        node.setAttribute("transform", `translate(${{player.x + dx}}, ${{player.y + dy}})`);
+                        player.currentX = player.x + dx;
+                        player.currentY = player.y + dy;
+                        node.setAttribute("transform", `translate(${{player.currentX}}, ${{player.currentY}})`);
                     }});
+                    const focusedPlayer = selectedPlayer();
+                    if (focusedPlayer && viewportMode === "player") {{
+                        const position = playerPosition(focusedPlayer);
+                        viewport.focusX = position.x;
+                        viewport.focusY = position.y;
+                        applyViewport();
+                    }}
                     animationFrame = requestAnimationFrame(animate);
                 }}
 
@@ -2311,8 +2348,17 @@ def show_bubble_arena(leaderboard, games):
                     }} else {{
                         players.forEach((player) => {{
                             const node = nodeSelection.get(player.id);
+                            player.currentX = player.x;
+                            player.currentY = player.y;
                             if (node) node.setAttribute("transform", `translate(${{player.x}}, ${{player.y}})`);
                         }});
+                        const focusedPlayer = selectedPlayer();
+                        if (focusedPlayer && viewportMode === "player") {{
+                            const position = playerPosition(focusedPlayer);
+                            viewport.focusX = position.x;
+                            viewport.focusY = position.y;
+                            applyViewport();
+                        }}
                     }}
                 }}
 
@@ -2332,6 +2378,7 @@ def show_bubble_arena(leaderboard, games):
                 }});
                 motionButton.addEventListener("click", () => setMotion(!motionOn));
                 stage.addEventListener("click", () => {{
+                    if (suppressClick) return;
                     selectPlayer(null, false);
                     fitArena();
                 }});
@@ -2340,6 +2387,51 @@ def show_bubble_arena(leaderboard, games):
                     const direction = event.deltaY < 0 ? 1 : -1;
                     setZoom(viewport.zoom + direction * 0.08);
                 }}, {{passive: false}});
+                stage.addEventListener("pointerdown", (event) => {{
+                    if (event.button !== 0) return;
+                    dragState = {{
+                        pointerId: event.pointerId,
+                        startX: event.clientX,
+                        startY: event.clientY,
+                        focusX: viewport.focusX ?? viewport.width / 2,
+                        focusY: viewport.focusY ?? viewport.height / 2,
+                        moved: false
+                    }};
+                }});
+                stage.addEventListener("pointermove", (event) => {{
+                    if (!dragState || dragState.pointerId !== event.pointerId) return;
+                    const dx = event.clientX - dragState.startX;
+                    const dy = event.clientY - dragState.startY;
+                    if (!dragState.moved && Math.hypot(dx, dy) < 3) return;
+                    if (!dragState.moved) stage.setPointerCapture(event.pointerId);
+                    dragState.moved = true;
+                    const stageRect = stage.getBoundingClientRect();
+                    const sceneUnitsPerPixelX = (viewport.width / viewport.zoom) / stageRect.width;
+                    const sceneUnitsPerPixelY = (viewport.height / viewport.zoom) / stageRect.height;
+                    viewportMode = "free";
+                    viewport.focusX = dragState.focusX - dx * sceneUnitsPerPixelX;
+                    viewport.focusY = dragState.focusY - dy * sceneUnitsPerPixelY;
+                    stage.classList.add("is-dragging");
+                    hideTooltip();
+                    applyViewport();
+                }});
+
+                function finishDrag(event) {{
+                    if (!dragState || dragState.pointerId !== event.pointerId) return;
+                    const moved = dragState.moved;
+                    if (stage.hasPointerCapture(event.pointerId)) {{
+                        stage.releasePointerCapture(event.pointerId);
+                    }}
+                    dragState = null;
+                    stage.classList.remove("is-dragging");
+                    if (moved) {{
+                        suppressClick = true;
+                        window.setTimeout(() => {{ suppressClick = false; }}, 0);
+                    }}
+                }}
+
+                stage.addEventListener("pointerup", finishDrag);
+                stage.addEventListener("pointercancel", finishDrag);
 
                 const resizeObserver = new ResizeObserver(() => {{
                     if (animationFrame) cancelAnimationFrame(animationFrame);
