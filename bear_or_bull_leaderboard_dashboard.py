@@ -1447,6 +1447,21 @@ def show_bubble_arena(leaderboard, games):
                 flex: 0 1 auto;
             }}
 
+            #{root_id} .arena-zoom {{
+                display: grid;
+                grid-template-columns: auto minmax(150px, 220px) auto auto auto;
+                align-items: center;
+                gap: 8px;
+                color: var(--arena-muted);
+                font-size: 12px;
+                font-weight: 800;
+            }}
+
+            #{root_id} .arena-zoom input[type="range"] {{
+                accent-color: var(--arena-gold-bright);
+                cursor: pointer;
+            }}
+
             #{root_id} button {{
                 border: 1px solid rgba(241, 207, 102, 0.36);
                 border-radius: 7px;
@@ -1500,6 +1515,7 @@ def show_bubble_arena(leaderboard, games):
                     radial-gradient(circle at 82% 48%, rgba(143, 46, 53, 0.08), transparent 24%),
                     linear-gradient(145deg, rgba(19, 16, 10, 0.95), rgba(2, 2, 2, 0.97));
                 box-shadow: inset 0 0 74px rgba(0, 0, 0, 0.56), 0 18px 44px rgba(0, 0, 0, 0.28);
+                touch-action: none;
             }}
 
             #{root_id} svg {{
@@ -1515,11 +1531,20 @@ def show_bubble_arena(leaderboard, games):
             }}
 
             #{root_id} .guide-label {{
-                fill: rgba(255, 244, 207, 0.74);
-                font-size: 11px;
+                fill: var(--arena-gold-pale);
+                font-size: 12px;
                 font-weight: 800;
                 letter-spacing: 0.08em;
                 text-transform: uppercase;
+                paint-order: stroke;
+                stroke: rgba(0, 0, 0, 0.78);
+                stroke-width: 3px;
+            }}
+
+            #{root_id} .guide-label-badge {{
+                fill: rgba(5, 5, 5, 0.72);
+                stroke: rgba(241, 207, 102, 0.32);
+                stroke-width: 1;
             }}
 
             #{root_id} .arena-crest {{
@@ -1531,6 +1556,11 @@ def show_bubble_arena(leaderboard, games):
             #{root_id} .bubble {{
                 cursor: pointer;
                 transition: opacity 180ms ease, filter 180ms ease;
+            }}
+
+            #{root_id} .arena-scene {{
+                transform-box: fill-box;
+                transform-origin: center;
             }}
 
             #{root_id} .bubble circle {{
@@ -1696,6 +1726,13 @@ def show_bubble_arena(leaderboard, games):
                 #{root_id} .arena-stage {{
                     height: 430px;
                 }}
+                #{root_id} .arena-zoom {{
+                    grid-template-columns: 1fr auto auto;
+                    width: 100%;
+                }}
+                #{root_id} .arena-zoom input[type="range"] {{
+                    grid-column: 1 / -1;
+                }}
                 #{root_id} .panel-grid,
                 #{root_id} .legend {{
                     grid-template-columns: 1fr;
@@ -1709,6 +1746,13 @@ def show_bubble_arena(leaderboard, games):
                 <input id="{root_id}-search" type="search" placeholder="Type any player name..." autocomplete="off">
             </div>
             <div class="arena-actions">
+                <div class="arena-zoom" aria-label="Bubble Arena zoom controls">
+                    <span>Zoom <strong id="{root_id}-zoom-value">100%</strong></span>
+                    <input id="{root_id}-zoom" type="range" min="70" max="190" value="100" step="5" aria-label="Zoom Bubble Arena">
+                    <button type="button" id="{root_id}-zoom-out" aria-label="Zoom out">-</button>
+                    <button type="button" id="{root_id}-zoom-in" aria-label="Zoom in">+</button>
+                    <button type="button" id="{root_id}-fit">Fit</button>
+                </div>
                 <button type="button" id="{root_id}-motion" aria-pressed="true">Motion on</button>
                 <button type="button" id="{root_id}-clear">Clear selection</button>
             </div>
@@ -1750,12 +1794,19 @@ def show_bubble_arena(leaderboard, games):
                 const searchInput = document.getElementById("{root_id}-search");
                 const clearButton = document.getElementById("{root_id}-clear");
                 const motionButton = document.getElementById("{root_id}-motion");
+                const zoomSlider = document.getElementById("{root_id}-zoom");
+                const zoomValue = document.getElementById("{root_id}-zoom-value");
+                const zoomInButton = document.getElementById("{root_id}-zoom-in");
+                const zoomOutButton = document.getElementById("{root_id}-zoom-out");
+                const fitButton = document.getElementById("{root_id}-fit");
                 const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
                 let motionOn = !prefersReduced;
                 let selectedId = null;
                 let animationFrame = null;
                 let startTime = performance.now();
                 let nodeSelection = new Map();
+                let sceneGroup = null;
+                const viewport = {{width: 0, height: 0, zoom: 1, focusX: null, focusY: null}};
                 const svgns = "http://www.w3.org/2000/svg";
 
                 root.querySelector('[data-meta="period"]').textContent = meta.period || "Selected games";
@@ -1780,7 +1831,7 @@ def show_bubble_arena(leaderboard, games):
                         legends: [arenaRadius * 0.12, arenaRadius * 0.25],
                         contenders: [arenaRadius * 0.27, arenaRadius * 0.45],
                         challengers: [arenaRadius * 0.47, arenaRadius * 0.64],
-                        field: [arenaRadius * 0.66, arenaRadius * 0.91],
+                        field: [arenaRadius * 0.67, arenaRadius * 0.985],
                     }};
                     return bounds[ringId] || bounds.field;
                 }}
@@ -1788,6 +1839,9 @@ def show_bubble_arena(leaderboard, games):
                 function actualRadius(player, arenaRadius) {{
                     const scale = Math.max(0.48, Math.min(0.90, arenaRadius / 430));
                     const base = Number(player.radius) || 5;
+                    if (player.ring === "field") {{
+                        return Math.max(2.8, Math.min(13, base * scale * 0.72));
+                    }}
                     return Math.max(3.3, Math.min(26, base * scale));
                 }}
 
@@ -1891,7 +1945,8 @@ def show_bubble_arena(leaderboard, games):
                         let best = null;
                         let bestPenalty = Number.POSITIVE_INFINITY;
 
-                        for (let attempt = 0; attempt < 90; attempt += 1) {{
+                        const attempts = player.ring === "field" ? 150 : 100;
+                        for (let attempt = 0; attempt < attempts; attempt += 1) {{
                             const angle = baseAngle + attempt * 2.399963229728653;
                             const fraction = ((seed >>> (attempt % 16)) + attempt * 37) % 1000 / 1000;
                             const distance = inner + (outer - inner) * fraction;
@@ -1931,20 +1986,69 @@ def show_bubble_arena(leaderboard, games):
                     return element;
                 }}
 
+                function clamp(value, min, max) {{
+                    return Math.max(min, Math.min(max, value));
+                }}
+
+                function applyViewport() {{
+                    if (!sceneGroup) return;
+                    const centerX = viewport.width / 2;
+                    const centerY = viewport.height / 2;
+                    const focusX = viewport.focusX ?? centerX;
+                    const focusY = viewport.focusY ?? centerY;
+                    sceneGroup.setAttribute(
+                        "transform",
+                        `translate(${{centerX}}, ${{centerY}}) scale(${{viewport.zoom}}) translate(${{-focusX}}, ${{-focusY}})`
+                    );
+                    zoomSlider.value = String(Math.round(viewport.zoom * 100));
+                    zoomValue.textContent = `${{Math.round(viewport.zoom * 100)}}%`;
+                }}
+
+                function setZoom(nextZoom, focusPlayer = null) {{
+                    viewport.zoom = clamp(nextZoom, 0.7, 1.9);
+                    if (focusPlayer) {{
+                        viewport.focusX = focusPlayer.x;
+                        viewport.focusY = focusPlayer.y;
+                    }}
+                    applyViewport();
+                }}
+
+                function fitArena() {{
+                    viewport.zoom = 1;
+                    viewport.focusX = viewport.width / 2;
+                    viewport.focusY = viewport.height / 2;
+                    applyViewport();
+                }}
+
                 function drawGuides(cx, cy, arenaRadius) {{
                     const guideGroup = svgEl("g");
                     const rings = [
-                        ["Champion's Core", "champion"],
-                        ["Legends' Ring", "legends"],
-                        ["Contenders' Ring", "contenders"],
-                        ["Challengers' Ring", "challengers"],
-                        ["The Field", "field"],
+                        ["Champion Core", "champion"],
+                        ["Top 5 Ring", "legends"],
+                        ["Top 20 Ring", "contenders"],
+                        ["Top 50 Ring", "challengers"],
                     ];
                     rings.forEach(([label, id]) => {{
                         const [, outer] = ringBounds(id, arenaRadius);
                         guideGroup.appendChild(svgEl("circle", {{cx, cy, r: outer, class: "guide-circle"}}));
                         if (arenaRadius > 230) {{
-                            const text = svgEl("text", {{x: cx + 8, y: cy - outer + 16, class: "guide-label"}});
+                            const labelWidth = Math.max(108, label.length * 8);
+                            const labelX = cx - labelWidth / 2;
+                            const labelY = cy - outer + 8;
+                            guideGroup.appendChild(svgEl("rect", {{
+                                x: labelX,
+                                y: labelY,
+                                width: labelWidth,
+                                height: 20,
+                                rx: 10,
+                                class: "guide-label-badge"
+                            }}));
+                            const text = svgEl("text", {{
+                                x: cx,
+                                y: labelY + 14,
+                                class: "guide-label",
+                                "text-anchor": "middle"
+                            }});
                             text.textContent = label;
                             guideGroup.appendChild(text);
                         }}
@@ -1954,7 +2058,7 @@ def show_bubble_arena(leaderboard, games):
                     const easy = svgEl("text", {{x: cx, y: cy + arenaRadius * 0.96, class: "guide-label", "text-anchor": "middle"}});
                     easy.textContent = "EASY NOW.";
                     guideGroup.appendChild(easy);
-                    svg.appendChild(guideGroup);
+                    sceneGroup.appendChild(guideGroup);
                 }}
 
                 function bubbleFill(player) {{
@@ -1978,9 +2082,23 @@ def show_bubble_arena(leaderboard, games):
                     nodeSelection.forEach((node, id) => node.classList.toggle("is-selected", id === selectedId));
                     renderPanel(player);
                     if (player && shouldFocus) {{
+                        viewport.focusX = player.x;
+                        viewport.focusY = player.y;
+                        setZoom(Math.max(viewport.zoom, 1.35), player);
                         const node = nodeSelection.get(player.id);
                         if (node) node.focus();
                     }}
+                }}
+
+                function scenePointToStage(x, y) {{
+                    const centerX = viewport.width / 2;
+                    const centerY = viewport.height / 2;
+                    const focusX = viewport.focusX ?? centerX;
+                    const focusY = viewport.focusY ?? centerY;
+                    return {{
+                        x: centerX + (x - focusX) * viewport.zoom,
+                        y: centerY + (y - focusY) * viewport.zoom
+                    }};
                 }}
 
                 function showTooltip(player, x, y) {{
@@ -2038,11 +2156,14 @@ def show_bubble_arena(leaderboard, games):
                         }}
 
                         group.addEventListener("pointerenter", () => {{
-                            const rect = stage.getBoundingClientRect();
-                            showTooltip(player, player.x, player.y);
+                            const point = scenePointToStage(player.x, player.y);
+                            showTooltip(player, point.x, point.y);
                         }});
                         group.addEventListener("pointerleave", hideTooltip);
-                        group.addEventListener("focus", () => showTooltip(player, player.x, player.y));
+                        group.addEventListener("focus", () => {{
+                            const point = scenePointToStage(player.x, player.y);
+                            showTooltip(player, point.x, point.y);
+                        }});
                         group.addEventListener("blur", hideTooltip);
                         group.addEventListener("click", (event) => {{
                             event.stopPropagation();
@@ -2058,7 +2179,7 @@ def show_bubble_arena(leaderboard, games):
                         nodeSelection.set(player.id, group);
                         bubbleGroup.appendChild(group);
                     }});
-                    svg.appendChild(bubbleGroup);
+                    sceneGroup.appendChild(bubbleGroup);
                 }}
 
                 function render() {{
@@ -2090,6 +2211,14 @@ def show_bubble_arena(leaderboard, games):
                     svg.appendChild(defs);
 
                     const layout = placePlayers(width, height);
+                    viewport.width = width;
+                    viewport.height = height;
+                    if (viewport.focusX === null || viewport.focusY === null) {{
+                        viewport.focusX = layout.cx;
+                        viewport.focusY = layout.cy;
+                    }}
+                    sceneGroup = svgEl("g", {{class: "arena-scene"}});
+                    svg.appendChild(sceneGroup);
                     drawGuides(layout.cx, layout.cy, layout.arenaRadius);
                     drawBubbles();
                     applySearch(searchInput.value || "");
@@ -2097,6 +2226,7 @@ def show_bubble_arena(leaderboard, games):
                         const selectedPlayer = players.find((player) => player.id === selectedId);
                         selectPlayer(selectedPlayer || null, false);
                     }}
+                    applyViewport();
                 }}
 
                 function applySearch(query) {{
@@ -2123,9 +2253,10 @@ def show_bubble_arena(leaderboard, games):
                         const node = nodeSelection.get(player.id);
                         if (!node) return;
                         const seed = hashText(player.id);
-                        const drift = player.rank === 1 ? 0.9 : 1.8;
-                        const dx = Math.sin(elapsed * 0.35 + seed * 0.0003) * drift;
-                        const dy = Math.cos(elapsed * 0.28 + seed * 0.0002) * drift;
+                        const drift = player.rank === 1 ? 1.2 : (player.ring === "field" ? 5.8 : 3.2);
+                        const speed = player.ring === "field" ? 0.42 : 0.28;
+                        const dx = Math.sin(elapsed * speed + seed * 0.0003) * drift;
+                        const dy = Math.cos(elapsed * (speed * 0.82) + seed * 0.0002) * drift;
                         node.setAttribute("transform", `translate(${{player.x + dx}}, ${{player.y + dy}})`);
                     }});
                     animationFrame = requestAnimationFrame(animate);
@@ -2149,14 +2280,30 @@ def show_bubble_arena(leaderboard, games):
                 }}
 
                 searchInput.addEventListener("input", () => applySearch(searchInput.value));
+                zoomSlider.addEventListener("input", () => setZoom(Number(zoomSlider.value) / 100));
+                zoomInButton.addEventListener("click", () => setZoom(viewport.zoom + 0.15));
+                zoomOutButton.addEventListener("click", () => setZoom(viewport.zoom - 0.15));
+                fitButton.addEventListener("click", () => {{
+                    fitArena();
+                    if (selectedId) {{
+                        const selectedPlayer = players.find((player) => player.id === selectedId);
+                        selectPlayer(selectedPlayer || null, false);
+                    }}
+                }});
                 clearButton.addEventListener("click", () => {{
                     searchInput.value = "";
                     applySearch("");
                     selectPlayer(null, false);
+                    fitArena();
                     hideTooltip();
                 }});
                 motionButton.addEventListener("click", () => setMotion(!motionOn));
                 stage.addEventListener("click", () => selectPlayer(null, false));
+                stage.addEventListener("wheel", (event) => {{
+                    event.preventDefault();
+                    const direction = event.deltaY < 0 ? 1 : -1;
+                    setZoom(viewport.zoom + direction * 0.08);
+                }}, {{passive: false}});
 
                 const resizeObserver = new ResizeObserver(() => {{
                     if (animationFrame) cancelAnimationFrame(animationFrame);
@@ -2176,7 +2323,7 @@ def show_bubble_arena(leaderboard, games):
     </div>
     """
 
-    components.html(html, height=920, scrolling=False)
+    components.html(html, height=960, scrolling=False)
 
 
 def style_leaderboard_table(table):
