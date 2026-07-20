@@ -2005,12 +2005,21 @@ def show_bubble_arena(leaderboard, games):
                     zoomValue.textContent = `${{Math.round(viewport.zoom * 100)}}%`;
                 }}
 
+                function selectedPlayer() {{
+                    return selectedId ? players.find((player) => player.id === selectedId) : null;
+                }}
+
                 function setZoom(nextZoom, focusPlayer = null) {{
                     viewport.zoom = clamp(nextZoom, 0.7, 1.9);
-                    if (focusPlayer) {{
+                    const anchorPlayer = focusPlayer || selectedPlayer();
+                    if (anchorPlayer) {{
                         viewportMode = "player";
-                        viewport.focusX = focusPlayer.x;
-                        viewport.focusY = focusPlayer.y;
+                        viewport.focusX = anchorPlayer.x;
+                        viewport.focusY = anchorPlayer.y;
+                    }} else {{
+                        viewportMode = "fit";
+                        viewport.focusX = viewport.width / 2;
+                        viewport.focusY = viewport.height / 2;
                     }}
                     applyViewport();
                 }}
@@ -2084,6 +2093,12 @@ def show_bubble_arena(leaderboard, games):
                     selectedId = player ? player.id : null;
                     nodeSelection.forEach((node, id) => node.classList.toggle("is-selected", id === selectedId));
                     renderPanel(player);
+                    if (player) {{
+                        viewportMode = "player";
+                        viewport.focusX = player.x;
+                        viewport.focusY = player.y;
+                        applyViewport();
+                    }}
                     if (player && shouldFocus) {{
                         viewportMode = "player";
                         viewport.focusX = player.x;
@@ -2261,8 +2276,22 @@ def show_bubble_arena(leaderboard, games):
                         const node = nodeSelection.get(player.id);
                         if (!node) return;
                         const seed = hashText(player.id);
-                        const drift = player.rank === 1 ? 1.2 : (player.ring === "field" ? 5.8 : 3.2);
-                        const speed = player.ring === "field" ? 0.42 : 0.28;
+                        const driftByRing = {{
+                            champion: 2.2,
+                            legends: 5.2,
+                            contenders: 4.7,
+                            challengers: 4.2,
+                            field: 5.8
+                        }};
+                        const speedByRing = {{
+                            champion: 0.36,
+                            legends: 0.38,
+                            contenders: 0.34,
+                            challengers: 0.31,
+                            field: 0.42
+                        }};
+                        const drift = driftByRing[player.ring] || 4.0;
+                        const speed = speedByRing[player.ring] || 0.34;
                         const dx = Math.sin(elapsed * speed + seed * 0.0003) * drift;
                         const dy = Math.cos(elapsed * (speed * 0.82) + seed * 0.0002) * drift;
                         node.setAttribute("transform", `translate(${{player.x + dx}}, ${{player.y + dy}})`);
@@ -2293,10 +2322,6 @@ def show_bubble_arena(leaderboard, games):
                 zoomOutButton.addEventListener("click", () => setZoom(viewport.zoom - 0.15));
                 fitButton.addEventListener("click", () => {{
                     fitArena();
-                    if (selectedId) {{
-                        const selectedPlayer = players.find((player) => player.id === selectedId);
-                        selectPlayer(selectedPlayer || null, false);
-                    }}
                 }});
                 clearButton.addEventListener("click", () => {{
                     searchInput.value = "";
@@ -2306,7 +2331,10 @@ def show_bubble_arena(leaderboard, games):
                     hideTooltip();
                 }});
                 motionButton.addEventListener("click", () => setMotion(!motionOn));
-                stage.addEventListener("click", () => selectPlayer(null, false));
+                stage.addEventListener("click", () => {{
+                    selectPlayer(null, false);
+                    fitArena();
+                }});
                 stage.addEventListener("wheel", (event) => {{
                     event.preventDefault();
                     const direction = event.deltaY < 0 ? 1 : -1;
