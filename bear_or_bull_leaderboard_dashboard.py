@@ -1554,8 +1554,11 @@ def show_bubble_arena(leaderboard, games):
                     linear-gradient(145deg, rgba(19, 16, 10, 0.95), rgba(2, 2, 2, 0.97));
                 box-shadow: inset 0 0 74px rgba(0, 0, 0, 0.56), 0 18px 44px rgba(0, 0, 0, 0.28);
                 touch-action: none;
+                overscroll-behavior: contain;
                 cursor: grab;
                 user-select: none;
+                -webkit-user-select: none;
+                -webkit-touch-callout: none;
             }}
 
             #{root_id} .arena-stage.is-dragging {{
@@ -1872,15 +1875,33 @@ def show_bubble_arena(leaderboard, games):
             }}
 
             @media (max-width: 560px) {{
+                #{root_id} .arena-controls,
+                #{root_id} .arena-search,
+                #{root_id} .arena-actions {{
+                    width: 100%;
+                }}
+                #{root_id} .arena-actions {{
+                    justify-content: flex-start;
+                }}
                 #{root_id} .arena-stage {{
                     height: 430px;
                 }}
                 #{root_id} .arena-zoom {{
-                    grid-template-columns: 1fr auto auto;
+                    grid-template-columns: minmax(0, 1fr) 42px 42px 42px;
                     width: 100%;
                 }}
-                #{root_id} .arena-zoom input[type="range"] {{
+                #{root_id} .arena-zoom span {{
                     grid-column: 1 / -1;
+                }}
+                #{root_id} .arena-zoom input[type="range"] {{
+                    grid-column: 1;
+                    min-width: 0;
+                    width: 100%;
+                }}
+                #{root_id} .arena-zoom button,
+                #{root_id} .arena-actions > button {{
+                    min-height: 42px;
+                    min-width: 42px;
                 }}
                 #{root_id} .panel-grid,
                 #{root_id} .legend {{
@@ -1951,6 +1972,8 @@ def show_bubble_arena(leaderboard, games):
                 const viewport = {{width: 0, height: 0, zoom: 1, focusX: null, focusY: null}};
                 let viewportMode = "fit";
                 let dragState = null;
+                let pinchState = null;
+                const activePointers = new Map();
                 let suppressClick = false;
                 const svgns = "http://www.w3.org/2000/svg";
 
@@ -2194,6 +2217,69 @@ def show_bubble_arena(leaderboard, games):
                         viewport.focusX = viewport.width / 2;
                         viewport.focusY = viewport.height / 2;
                     }}
+                    applyViewport();
+                }}
+
+                function gestureMetrics(pointerValues) {{
+                    const first = pointerValues[0];
+                    const second = pointerValues[1];
+                    return {{
+                        distance: Math.hypot(second.x - first.x, second.y - first.y),
+                        midX: (first.x + second.x) / 2,
+                        midY: (first.y + second.y) / 2
+                    }};
+                }}
+
+                function beginPinch() {{
+                    if (activePointers.size < 2 || !viewport.width || !viewport.height) return;
+                    const pointers = Array.from(activePointers.values()).slice(0, 2);
+                    const metrics = gestureMetrics(pointers);
+                    const stageRect = stage.getBoundingClientRect();
+                    const focusX = viewport.focusX ?? viewport.width / 2;
+                    const focusY = viewport.focusY ?? viewport.height / 2;
+                    const visibleWidth = viewport.width / viewport.zoom;
+                    const visibleHeight = viewport.height / viewport.zoom;
+                    const localX = clamp((metrics.midX - stageRect.left) / stageRect.width, 0, 1);
+                    const localY = clamp((metrics.midY - stageRect.top) / stageRect.height, 0, 1);
+                    pinchState = {{
+                        startDistance: Math.max(metrics.distance, 1),
+                        startZoom: viewport.zoom,
+                        anchorX: focusX - visibleWidth / 2 + localX * visibleWidth,
+                        anchorY: focusY - visibleHeight / 2 + localY * visibleHeight
+                    }};
+                    dragState = null;
+                    suppressClick = true;
+                    stage.classList.add("is-dragging");
+                    activePointers.forEach((_, pointerId) => {{
+                        if (!stage.hasPointerCapture(pointerId)) stage.setPointerCapture(pointerId);
+                    }});
+                }}
+
+                function updatePinch() {{
+                    if (!pinchState || activePointers.size < 2) return;
+                    const pointers = Array.from(activePointers.values()).slice(0, 2);
+                    const metrics = gestureMetrics(pointers);
+                    const nextZoom = clamp(
+                        pinchState.startZoom * (metrics.distance / pinchState.startDistance),
+                        0.85,
+                        1.9
+                    );
+                    const focusedPlayer = selectedPlayer();
+                    viewport.zoom = nextZoom;
+                    if (focusedPlayer) {{
+                        const position = playerPosition(focusedPlayer);
+                        viewportMode = "player";
+                        viewport.focusX = position.x;
+                        viewport.focusY = position.y;
+                    }} else {{
+                        const stageRect = stage.getBoundingClientRect();
+                        const localX = clamp((metrics.midX - stageRect.left) / stageRect.width, 0, 1);
+                        const localY = clamp((metrics.midY - stageRect.top) / stageRect.height, 0, 1);
+                        viewportMode = "free";
+                        viewport.focusX = pinchState.anchorX - (localX - 0.5) * (viewport.width / nextZoom);
+                        viewport.focusY = pinchState.anchorY - (localY - 0.5) * (viewport.height / nextZoom);
+                    }}
+                    hideTooltip();
                     applyViewport();
                 }}
 
@@ -2615,22 +2701,38 @@ def show_bubble_arena(leaderboard, games):
                     setZoom(viewport.zoom + direction * 0.08);
                 }}, {{passive: false}});
                 stage.addEventListener("pointerdown", (event) => {{
-                    if (event.button !== 0) return;
+                    if (event.pointerType === "mouse" && event.button !== 0) return;
+                    activePointers.set(event.pointerId, {{x: event.clientX, y: event.clientY}});
+                    if (activePointers.size >= 2) {{
+                        event.preventDefault();
+                        beginPinch();
+                        return;
+                    }}
                     dragState = {{
                         pointerId: event.pointerId,
                         startX: event.clientX,
                         startY: event.clientY,
                         focusX: viewport.focusX ?? viewport.width / 2,
                         focusY: viewport.focusY ?? viewport.height / 2,
-                        moved: false
+                        moved: false,
+                        fromPinch: false
                     }};
                 }});
                 stage.addEventListener("pointermove", (event) => {{
+                    if (activePointers.has(event.pointerId)) {{
+                        activePointers.set(event.pointerId, {{x: event.clientX, y: event.clientY}});
+                    }}
+                    if (pinchState) {{
+                        event.preventDefault();
+                        updatePinch();
+                        return;
+                    }}
                     if (!dragState || dragState.pointerId !== event.pointerId) return;
                     const dx = event.clientX - dragState.startX;
                     const dy = event.clientY - dragState.startY;
                     if (!dragState.moved && Math.hypot(dx, dy) < 3) return;
                     if (!dragState.moved) stage.setPointerCapture(event.pointerId);
+                    event.preventDefault();
                     dragState.moved = true;
                     const stageRect = stage.getBoundingClientRect();
                     const sceneUnitsPerPixelX = (viewport.width / viewport.zoom) / stageRect.width;
@@ -2644,16 +2746,46 @@ def show_bubble_arena(leaderboard, games):
                 }});
 
                 function finishDrag(event) {{
+                    activePointers.delete(event.pointerId);
+                    if (pinchState) {{
+                        if (stage.hasPointerCapture(event.pointerId)) {{
+                            stage.releasePointerCapture(event.pointerId);
+                        }}
+                        if (activePointers.size >= 2) {{
+                            beginPinch();
+                        }} else if (activePointers.size === 1) {{
+                            const [pointerId, pointer] = Array.from(activePointers.entries())[0];
+                            pinchState = null;
+                            dragState = {{
+                                pointerId,
+                                startX: pointer.x,
+                                startY: pointer.y,
+                                focusX: viewport.focusX ?? viewport.width / 2,
+                                focusY: viewport.focusY ?? viewport.height / 2,
+                                moved: false,
+                                fromPinch: true
+                            }};
+                            stage.classList.remove("is-dragging");
+                        }} else {{
+                            pinchState = null;
+                            dragState = null;
+                            stage.classList.remove("is-dragging");
+                            suppressClick = true;
+                            window.setTimeout(() => {{ suppressClick = false; }}, 140);
+                        }}
+                        return;
+                    }}
                     if (!dragState || dragState.pointerId !== event.pointerId) return;
                     const moved = dragState.moved;
+                    const shouldSuppressClick = moved || dragState.fromPinch;
                     if (stage.hasPointerCapture(event.pointerId)) {{
                         stage.releasePointerCapture(event.pointerId);
                     }}
                     dragState = null;
                     stage.classList.remove("is-dragging");
-                    if (moved) {{
+                    if (shouldSuppressClick) {{
                         suppressClick = true;
-                        window.setTimeout(() => {{ suppressClick = false; }}, 0);
+                        window.setTimeout(() => {{ suppressClick = false; }}, 140);
                     }}
                 }}
 
