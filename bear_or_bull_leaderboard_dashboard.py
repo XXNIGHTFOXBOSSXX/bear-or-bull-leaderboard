@@ -1538,19 +1538,23 @@ def show_bubble_arena(leaderboard, games):
 
             #{root_id} .guide-label {{
                 fill: var(--arena-gold-pale);
-                font-size: 12px;
-                font-weight: 800;
+                font-size: 13px;
+                font-weight: 900;
                 letter-spacing: 0.08em;
                 text-transform: uppercase;
                 paint-order: stroke;
-                stroke: rgba(0, 0, 0, 0.78);
-                stroke-width: 3px;
+                stroke: rgba(0, 0, 0, 0.94);
+                stroke-width: 4px;
             }}
 
             #{root_id} .guide-label-badge {{
-                fill: rgba(5, 5, 5, 0.72);
-                stroke: rgba(241, 207, 102, 0.32);
-                stroke-width: 1;
+                fill: rgba(5, 5, 5, 0.94);
+                stroke: rgba(241, 207, 102, 0.72);
+                stroke-width: 1.4;
+            }}
+
+            #{root_id} .guide-label-layer {{
+                pointer-events: none;
             }}
 
             #{root_id} .arena-crest {{
@@ -1590,6 +1594,10 @@ def show_bubble_arena(leaderboard, games):
 
             #{root_id} .bubble-name.is-light {{
                 fill: var(--arena-text);
+                paint-order: stroke;
+                stroke: rgba(0, 0, 0, 0.88);
+                stroke-width: 1.6px;
+                stroke-linejoin: round;
             }}
 
             #{root_id} .bubble-symbol {{
@@ -1842,11 +1850,19 @@ def show_bubble_arena(leaderboard, games):
 
                 function actualRadius(player, arenaRadius) {{
                     const scale = Math.max(0.48, Math.min(0.90, arenaRadius / 430));
+                    const legibilityScale = Math.max(0.70, Math.min(1, arenaRadius / 330));
                     const base = Number(player.radius) || 5;
                     if (player.ring === "field") {{
                         return Math.max(2.8, Math.min(13, base * scale * 0.72));
                     }}
-                    return Math.max(3.3, Math.min(26, base * scale));
+                    const minimumByRing = {{
+                        champion: 26,
+                        legends: 21,
+                        contenders: 17,
+                        challengers: 14
+                    }};
+                    const minimum = (minimumByRing[player.ring] || 8) * legibilityScale;
+                    return Math.max(minimum, Math.min(26, base * scale));
                 }}
 
                 function formatOrdinal(value) {{
@@ -1937,6 +1953,23 @@ def show_bubble_arena(leaderboard, games):
                         if (player.rank === 1) {{
                             player.x = cx;
                             player.y = cy;
+                            player.orbitAngle = null;
+                            player.orbitRadius = null;
+                            player.currentX = player.x;
+                            player.currentY = player.y;
+                            placed.push(player);
+                            continue;
+                        }}
+
+                        // The leader stays centred while ranks 2-5 share an even orbit.
+                        if (player.rank >= 2 && player.rank <= 5) {{
+                            const orbitIndex = player.rank - 2;
+                            player.orbitAngle = -Math.PI / 4 + orbitIndex * Math.PI / 2;
+                            player.orbitRadius = arenaRadius * 0.19;
+                            player.orbitCenterX = cx;
+                            player.orbitCenterY = cy;
+                            player.x = cx + Math.cos(player.orbitAngle) * player.orbitRadius;
+                            player.y = cy + Math.sin(player.orbitAngle) * player.orbitRadius;
                             player.currentX = player.x;
                             player.currentY = player.y;
                             placed.push(player);
@@ -2047,45 +2080,57 @@ def show_bubble_arena(leaderboard, games):
                     applyViewport();
                 }}
 
-                function drawGuides(cx, cy, arenaRadius) {{
-                    const guideGroup = svgEl("g");
-                    const rings = [
+                function guideDefinitions() {{
+                    return [
                         ["Champion Core", "champion"],
                         ["Top 5 Ring", "legends"],
                         ["Top 20 Ring", "contenders"],
                         ["Top 50 Ring", "challengers"],
                     ];
-                    rings.forEach(([label, id]) => {{
+                }}
+
+                function drawGuideStructure(cx, cy, arenaRadius) {{
+                    const guideGroup = svgEl("g", {{class: "guide-structure"}});
+                    guideDefinitions().forEach(([, id]) => {{
                         const [, outer] = ringBounds(id, arenaRadius);
                         guideGroup.appendChild(svgEl("circle", {{cx, cy, r: outer, class: "guide-circle"}}));
-                        if (arenaRadius > 230) {{
-                            const labelWidth = Math.max(108, label.length * 8);
-                            const labelX = cx - labelWidth / 2;
-                            const labelY = cy - outer + 8;
-                            guideGroup.appendChild(svgEl("rect", {{
-                                x: labelX,
-                                y: labelY,
-                                width: labelWidth,
-                                height: 20,
-                                rx: 10,
-                                class: "guide-label-badge"
-                            }}));
-                            const text = svgEl("text", {{
-                                x: cx,
-                                y: labelY + 14,
-                                class: "guide-label",
-                                "text-anchor": "middle"
-                            }});
-                            text.textContent = label;
-                            guideGroup.appendChild(text);
-                        }}
                     }});
                     const crest = svgEl("circle", {{cx, cy, r: Math.max(28, arenaRadius * 0.055), class: "arena-crest"}});
                     guideGroup.appendChild(crest);
+                    sceneGroup.appendChild(guideGroup);
+                }}
+
+                function drawGuideLabels(cx, cy, arenaRadius) {{
+                    if (arenaRadius <= 230) return;
+                    const labelGroup = svgEl("g", {{class: "guide-label-layer"}});
+                    guideDefinitions().forEach(([label, id]) => {{
+                        const [, outer] = ringBounds(id, arenaRadius);
+                        const labelWidth = Math.max(116, label.length * 8.5);
+                        const labelX = cx - labelWidth / 2;
+                        const labelY = id === "champion"
+                            ? cy - Math.max(50, arenaRadius * 0.145)
+                            : cy - outer + 8;
+                        labelGroup.appendChild(svgEl("rect", {{
+                            x: labelX,
+                            y: labelY,
+                            width: labelWidth,
+                            height: 22,
+                            rx: 11,
+                            class: "guide-label-badge"
+                        }}));
+                        const text = svgEl("text", {{
+                            x: cx,
+                            y: labelY + 15,
+                            class: "guide-label",
+                            "text-anchor": "middle"
+                        }});
+                        text.textContent = label;
+                        labelGroup.appendChild(text);
+                    }});
                     const easy = svgEl("text", {{x: cx, y: cy + arenaRadius * 0.96, class: "guide-label", "text-anchor": "middle"}});
                     easy.textContent = "EASY NOW.";
-                    guideGroup.appendChild(easy);
-                    sceneGroup.appendChild(guideGroup);
+                    labelGroup.appendChild(easy);
+                    sceneGroup.appendChild(labelGroup);
                 }}
 
                 function bubbleFill(player) {{
@@ -2181,25 +2226,42 @@ def show_bubble_arena(leaderboard, games):
                             group.appendChild(symbol);
                         }}
 
-                        const shouldLabel = player.rank === 1 || player.rank <= 5 || (player.renderRadius >= 18 && player.rank <= 50);
+                        const shouldLabel = player.rank <= 50;
                         if (shouldLabel) {{
+                            const fontSize = clamp(player.renderRadius * 0.52, 7, player.rank <= 5 ? 10 : 9);
+                            const maxTextWidth = Math.max(14, player.renderRadius * 1.62);
+                            const characters = Array.from(player.name);
+                            const estimatedCharacterWidth = fontSize * 0.54;
+                            const maxCharacters = Math.max(3, Math.floor(maxTextWidth / estimatedCharacterWidth));
+                            const visibleCharacters = characters.length > maxCharacters
+                                ? [...characters.slice(0, Math.max(2, maxCharacters - 1)), "…"]
+                                : characters;
+                            const visibleName = visibleCharacters.join("");
                             const label = svgEl("text", {{
                                 x: 0,
                                 y: 3,
-                                class: player.rank <= 5 ? "bubble-name" : "bubble-name is-light"
+                                class: player.rank <= 5 ? "bubble-name" : "bubble-name is-light",
+                                "aria-hidden": "true"
                             }});
-                            const shortName = player.name.length > 12 ? `${{player.name.slice(0, 10)}}…` : player.name;
-                            label.textContent = shortName;
+                            label.style.fontSize = `${{fontSize}}px`;
+                            label.textContent = visibleName;
+                            const estimatedTextWidth = visibleCharacters.length * estimatedCharacterWidth;
+                            if (estimatedTextWidth > maxTextWidth) {{
+                                label.setAttribute("textLength", maxTextWidth);
+                                label.setAttribute("lengthAdjust", "spacingAndGlyphs");
+                            }}
                             group.appendChild(label);
                         }}
 
                         group.addEventListener("pointerenter", () => {{
-                            const point = scenePointToStage(player.x, player.y);
+                            const position = playerPosition(player);
+                            const point = scenePointToStage(position.x, position.y);
                             showTooltip(player, point.x, point.y);
                         }});
                         group.addEventListener("pointerleave", hideTooltip);
                         group.addEventListener("focus", () => {{
-                            const point = scenePointToStage(player.x, player.y);
+                            const position = playerPosition(player);
+                            const point = scenePointToStage(position.x, position.y);
                             showTooltip(player, point.x, point.y);
                         }});
                         group.addEventListener("blur", hideTooltip);
@@ -2265,8 +2327,9 @@ def show_bubble_arena(leaderboard, games):
                     }}
                     sceneGroup = svgEl("g", {{class: "arena-scene"}});
                     svg.appendChild(sceneGroup);
-                    drawGuides(layout.cx, layout.cy, layout.arenaRadius);
+                    drawGuideStructure(layout.cx, layout.cy, layout.arenaRadius);
                     drawBubbles();
+                    drawGuideLabels(layout.cx, layout.cy, layout.arenaRadius);
                     applySearch(searchInput.value || "");
                     if (selectedId) {{
                         const selectedPlayer = players.find((player) => player.id === selectedId);
@@ -2304,16 +2367,27 @@ def show_bubble_arena(leaderboard, games):
                         const node = nodeSelection.get(player.id);
                         if (!node) return;
                         const seed = hashText(player.id);
+                        if (player.rank === 1) {{
+                            player.currentX = player.x;
+                            player.currentY = player.y;
+                            node.setAttribute("transform", `translate(${{player.currentX}}, ${{player.currentY}})`);
+                            return;
+                        }}
+                        if (player.rank >= 2 && player.rank <= 5 && player.orbitAngle !== null) {{
+                            const orbitAngle = player.orbitAngle + elapsed * 0.055;
+                            const radialDrift = Math.sin(elapsed * 0.42 + player.rank) * 2.5;
+                            const orbitRadius = player.orbitRadius + radialDrift;
+                            player.currentX = player.orbitCenterX + Math.cos(orbitAngle) * orbitRadius;
+                            player.currentY = player.orbitCenterY + Math.sin(orbitAngle) * orbitRadius;
+                            node.setAttribute("transform", `translate(${{player.currentX}}, ${{player.currentY}})`);
+                            return;
+                        }}
                         const driftByRing = {{
-                            champion: 2.2,
-                            legends: 5.2,
                             contenders: 4.7,
                             challengers: 4.2,
                             field: 5.8
                         }};
                         const speedByRing = {{
-                            champion: 0.36,
-                            legends: 0.38,
                             contenders: 0.34,
                             challengers: 0.31,
                             field: 0.42
