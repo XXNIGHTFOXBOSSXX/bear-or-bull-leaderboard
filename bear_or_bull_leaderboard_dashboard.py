@@ -1807,6 +1807,7 @@ def show_bubble_arena(leaderboard, games):
                 let nodeSelection = new Map();
                 let sceneGroup = null;
                 const viewport = {{width: 0, height: 0, zoom: 1, focusX: null, focusY: null}};
+                let viewportMode = "fit";
                 const svgns = "http://www.w3.org/2000/svg";
 
                 root.querySelector('[data-meta="period"]').textContent = meta.period || "Selected games";
@@ -2007,6 +2008,7 @@ def show_bubble_arena(leaderboard, games):
                 function setZoom(nextZoom, focusPlayer = null) {{
                     viewport.zoom = clamp(nextZoom, 0.7, 1.9);
                     if (focusPlayer) {{
+                        viewportMode = "player";
                         viewport.focusX = focusPlayer.x;
                         viewport.focusY = focusPlayer.y;
                     }}
@@ -2014,6 +2016,7 @@ def show_bubble_arena(leaderboard, games):
                 }}
 
                 function fitArena() {{
+                    viewportMode = "fit";
                     viewport.zoom = 1;
                     viewport.focusX = viewport.width / 2;
                     viewport.focusY = viewport.height / 2;
@@ -2082,6 +2085,7 @@ def show_bubble_arena(leaderboard, games):
                     nodeSelection.forEach((node, id) => node.classList.toggle("is-selected", id === selectedId));
                     renderPanel(player);
                     if (player && shouldFocus) {{
+                        viewportMode = "player";
                         viewport.focusX = player.x;
                         viewport.focusY = player.y;
                         setZoom(Math.max(viewport.zoom, 1.35), player);
@@ -2187,7 +2191,7 @@ def show_bubble_arena(leaderboard, games):
                     const height = Math.round(
                         width < 560
                             ? 430
-                            : Math.max(560, Math.min(720, width * 0.58))
+                            : Math.max(640, Math.min(800, width * 0.55))
                     );
                     stage.style.height = `${{height}}px`;
                     svg.setAttribute("viewBox", `0 0 ${{width}} ${{height}}`);
@@ -2213,7 +2217,7 @@ def show_bubble_arena(leaderboard, games):
                     const layout = placePlayers(width, height);
                     viewport.width = width;
                     viewport.height = height;
-                    if (viewport.focusX === null || viewport.focusY === null) {{
+                    if (viewportMode === "fit" || viewport.focusX === null || viewport.focusY === null) {{
                         viewport.focusX = layout.cx;
                         viewport.focusY = layout.cy;
                     }}
@@ -2224,6 +2228,10 @@ def show_bubble_arena(leaderboard, games):
                     applySearch(searchInput.value || "");
                     if (selectedId) {{
                         const selectedPlayer = players.find((player) => player.id === selectedId);
+                        if (selectedPlayer && viewportMode === "player") {{
+                            viewport.focusX = selectedPlayer.x;
+                            viewport.focusY = selectedPlayer.y;
+                        }}
                         selectPlayer(selectedPlayer || null, false);
                     }}
                     applyViewport();
@@ -2323,7 +2331,7 @@ def show_bubble_arena(leaderboard, games):
     </div>
     """
 
-    components.html(html, height=960, scrolling=False)
+    components.html(html, height=1040, scrolling=False)
 
 
 def style_leaderboard_table(table):
