@@ -1767,7 +1767,7 @@ def show_bubble_arena(leaderboard, games):
             <div class="arena-actions">
                 <div class="arena-zoom" aria-label="Bubble Arena zoom controls">
                     <span>Zoom <strong id="{root_id}-zoom-value">100%</strong></span>
-                    <input id="{root_id}-zoom" type="range" min="70" max="190" value="100" step="5" aria-label="Zoom Bubble Arena">
+                    <input id="{root_id}-zoom" type="range" min="85" max="190" value="100" step="5" aria-label="Zoom Bubble Arena">
                     <button type="button" id="{root_id}-zoom-out" aria-label="Zoom out">-</button>
                     <button type="button" id="{root_id}-zoom-in" aria-label="Zoom in">+</button>
                     <button type="button" id="{root_id}-fit">Fit</button>
@@ -1867,9 +1867,9 @@ def show_bubble_arena(leaderboard, games):
                     }}
                     const minimumByRing = {{
                         champion: 26,
-                        legends: 21,
-                        contenders: 18,
-                        challengers: 15
+                        legends: 22,
+                        contenders: 19,
+                        challengers: 17
                     }};
                     const minimum = (minimumByRing[player.ring] || 8) * legibilityScale;
                     return Math.max(minimum, Math.min(26, base * scale));
@@ -2068,7 +2068,7 @@ def show_bubble_arena(leaderboard, games):
                 }}
 
                 function setZoom(nextZoom, focusPlayer = null) {{
-                    viewport.zoom = clamp(nextZoom, 0.7, 1.9);
+                    viewport.zoom = clamp(nextZoom, 0.85, 1.9);
                     const anchorPlayer = focusPlayer || selectedPlayer();
                     if (anchorPlayer) {{
                         const position = playerPosition(anchorPlayer);
@@ -2263,41 +2263,26 @@ def show_bubble_arena(leaderboard, games):
 
                         const shouldLabel = player.rank <= 50;
                         if (shouldLabel) {{
-                            const fontSize = clamp(player.renderRadius * 0.50, 6.4, player.rank <= 5 ? 10 : 9);
-                            const maxTextWidth = Math.max(16, player.renderRadius * 1.72);
+                            const preferredFontSize = clamp(player.renderRadius * 0.48, 6.4, player.rank <= 5 ? 10 : 9);
+                            const maxTextWidth = Math.max(18, player.renderRadius * 1.78);
                             const characters = Array.from(player.name);
-                            const estimatedCharacterWidth = fontSize * 0.54;
-                            const estimatedFullWidth = characters.length * estimatedCharacterWidth;
-                            const lineCount = clamp(Math.ceil(estimatedFullWidth / maxTextWidth), 1, 3);
-                            const charactersPerLine = Math.ceil(characters.length / lineCount);
-                            const nameLines = [];
-                            for (let lineIndex = 0; lineIndex < lineCount; lineIndex += 1) {{
-                                nameLines.push(characters.slice(
-                                    lineIndex * charactersPerLine,
-                                    (lineIndex + 1) * charactersPerLine
-                                ));
-                            }}
+                            const naturalWidth = characters.length * preferredFontSize * 0.54;
+                            const fittedFontSize = naturalWidth > maxTextWidth
+                                ? Math.max(5.6, preferredFontSize * maxTextWidth / naturalWidth)
+                                : preferredFontSize;
                             const label = svgEl("text", {{
                                 x: 0,
+                                y: 3,
                                 class: player.rank <= 5 ? "bubble-name" : "bubble-name is-light",
                                 "aria-hidden": "true"
                             }});
-                            label.style.fontSize = `${{fontSize}}px`;
-                            const lineHeight = fontSize * 0.82;
-                            const firstBaseline = 2.5 - ((nameLines.length - 1) * lineHeight) / 2;
-                            nameLines.forEach((lineCharacters, lineIndex) => {{
-                                const tspan = svgEl("tspan", {{
-                                    x: 0,
-                                    y: firstBaseline + lineIndex * lineHeight
-                                }});
-                                tspan.textContent = lineCharacters.join("");
-                                const estimatedLineWidth = lineCharacters.length * estimatedCharacterWidth;
-                                if (estimatedLineWidth > maxTextWidth) {{
-                                    tspan.setAttribute("textLength", maxTextWidth);
-                                    tspan.setAttribute("lengthAdjust", "spacingAndGlyphs");
-                                }}
-                                label.appendChild(tspan);
-                            }});
+                            label.style.fontSize = `${{fittedFontSize}}px`;
+                            label.textContent = player.name;
+                            const fittedNaturalWidth = characters.length * fittedFontSize * 0.54;
+                            if (fittedNaturalWidth > maxTextWidth) {{
+                                label.setAttribute("textLength", maxTextWidth);
+                                label.setAttribute("lengthAdjust", "spacingAndGlyphs");
+                            }}
                             group.appendChild(label);
                         }}
 
